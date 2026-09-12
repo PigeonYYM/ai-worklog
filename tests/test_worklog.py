@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -76,6 +78,82 @@ class TestAppendAndRead(WorklogTestCase):
         worklog.append_record(datetime(2026, 9, 11, 8, 0), "r", "今天的事", "opencode")
         self.assertEqual(len(worklog.read_day(datetime(2026, 9, 10))), 1)
         self.assertEqual(len(worklog.read_day(datetime(2026, 9, 11))), 1)
+
+
+class TestMigrate(WorklogTestCase):
+    def _write_md(self, dirpath, day_str, lines):
+        path = Path(dirpath) / (day_str + ".md")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def test_reconstructs_timestamp_from_filename_not_clock(self):
+        import migrate_legacy
+        import worklog
+        # 用一个明显不等于「今天」的日期，证明写入的日期/时间来自文件名与 md
+        # 行内容，而非运行测试时的系统时钟。
+        day_str = "2024-03-04"
+        with tempfile.TemporaryDirectory() as src:
+            md_path = self._write_md(src, day_str, [
+                "# 2024-03-04 周一",
+                "",
+                "- 17:41 [ad-platform-frontend] 配置周报 hook",
+                "- 19:02 [repo] 阶段B2：Properties 构建",
+            ])
+            count = migrate_legacy.migrate(md_path)
+
+        self.assertEqual(count, 2)
+        rows = worklog.read_day(datetime(2024, 3, 4))
+        self.assertEqual(
+            rows,
+            [
+                ("17:41", "ad-platform-frontend", "配置周报 hook", "claude"),
+                ("19:02", "repo", "阶段B2：Properties 构建", "claude"),
+            ],
+        )
+
+    def test_returned_count_matches_source_record_lines(self):
+        import migrate_legacy
+        day_str = "2026-09-11"
+        lines = [
+            "# 2026-09-11 周五",
+            "",
+            "- 17:41 [repo-a] 事情一",
+            "- 18:00 [repo-b] 事情二",
+            "- 20:04 [repo-c] 事情三",
+        ]
+        with tempfile.TemporaryDirectory() as src:
+            md_path = self._write_md(src, day_str, lines)
+            count = migrate_legacy.migrate(md_path)
+
+        record_line_count = len(
+            [l for l in lines if l.startswith("- ") and ":" in l[2:7] and "[" in l]
+        )
+        self.assertEqual(record_line_count, 3)
+        self.assertEqual(count, record_line_count)
+
+    def test_second_migrate_on_populated_target_is_rejected_and_does_not_grow_tsv(self):
+        import migrate_legacy
+        import worklog
+        day_str = "2026-09-11"
+        with tempfile.TemporaryDirectory() as src:
+            md_path = self._write_md(src, day_str, [
+                "- 17:41 [repo] 事情一",
+                "- 18:00 [repo] 事情二",
+            ])
+            first_count = migrate_legacy.migrate(md_path)
+            self.assertEqual(first_count, 2)
+
+            target = worklog.raw_path(datetime(2026, 9, 11))
+            lines_after_first = target.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines_after_first), 2)
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                second_count = migrate_legacy.migrate(md_path)
+
+        self.assertEqual(second_count, -1)
+        lines_after_second = target.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(lines_after_second, lines_after_first)
+        self.assertEqual(len(lines_after_second), 2)
 
 
 class TestParseLegacy(WorklogTestCase):
