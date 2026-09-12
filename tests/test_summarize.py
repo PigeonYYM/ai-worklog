@@ -113,6 +113,124 @@ class TestAtomicWrite(SummarizeTestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "内容\n")
         self.assertEqual(list(worklog.report_dir().glob("*.tmp")), [])
 
+    def test_leaves_no_tmp_when_replace_fails(self):
+        import summarize
+        import worklog
+        worklog.report_dir().mkdir(parents=True, exist_ok=True)
+        # 目标路径本身是一个目录，os.replace 到这里必然失败（IsADirectoryError
+        # 是 OSError 的子类），用来触发 atomic_write 里 os.replace 那一步的异常路径。
+        target = worklog.report_dir() / "out_dir.md"
+        target.mkdir()
+        tmp_path = target.with_name(target.name + ".tmp")
+        with self.assertRaises(OSError):
+            summarize.atomic_write(target, "内容\n")
+        self.assertFalse(tmp_path.exists())
+
+
+def write_stub(path: Path, body: str) -> None:
+    """写一个模拟 opencode 的可执行脚本，供 WORKLOG_OPENCODE 指向。"""
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+class TestRunModelStub(SummarizeTestCase):
+    """用真实子进程（可执行的 stub 脚本）驱动 run_model 的临时文件机制，
+    而不是让它在 opencode_bin() 处提前短路返回 None。这条路径此前完全没有
+    测试覆盖：tempfile.mkstemp 创建、以文件方式接收 stdout、读回、清理。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.stub_dir = tempfile.TemporaryDirectory()
+        self.stub_path = Path(self.stub_dir.name) / "fake-opencode"
+
+    def tearDown(self):
+        os.environ.pop("WORKLOG_OPENCODE", None)
+        self.stub_dir.cleanup()
+        super().tearDown()
+
+    def _tmp_leftovers(self):
+        # run_model 用 tempfile.mkstemp(suffix=".txt") 创建临时文件，
+        # 默认落在系统临时目录（tempfile.gettempdir()），不是 report_dir()。
+        return list(Path(tempfile.gettempdir()).glob("tmp*.txt"))
+
+    def test_success_returns_body_and_leaves_no_tmp(self):
+        import summarize
+        write_stub(
+            self.stub_path,
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "print('> build \\u00b7 kimi-for-coding/k3')\n"
+            "print()\n"
+            "print('## repo')\n"
+            "print('- 做了某事')\n",
+        )
+        os.environ["WORKLOG_OPENCODE"] = str(self.stub_path)
+        before = set(self._tmp_leftovers())
+        body = summarize.run_model("随便一个 prompt")
+        after = set(self._tmp_leftovers())
+        self.assertEqual(body, "## repo\n- 做了某事")
+        self.assertEqual(after - before, set())
+
+    def test_success_with_large_output_leaves_no_tmp(self):
+        import summarize
+        # pin 住临时文件方案要保护的确切行为：管道捕获在大输出下会静默截断，
+        # 文件方式不会。这里让 stub 输出明显超过 64KB。
+        write_stub(
+            self.stub_path,
+            "#!/usr/bin/env python3\n"
+            "print('> build \\u00b7 kimi-for-coding/k3')\n"
+            "print()\n"
+            "print('## repo')\n"
+            "line = '- ' + ('x' * 200)\n"
+            "for _ in range(400):\n"
+            "    print(line)\n",
+        )
+        os.environ["WORKLOG_OPENCODE"] = str(self.stub_path)
+        before = set(self._tmp_leftovers())
+        body = summarize.run_model("prompt")
+        after = set(self._tmp_leftovers())
+        self.assertIsNotNone(body)
+        self.assertGreater(len(body.encode("utf-8")), 64 * 1024)
+        self.assertTrue(body.startswith("## repo"))
+        self.assertEqual(after - before, set())
+
+    def test_nonzero_exit_returns_none_and_leaves_no_tmp(self):
+        import summarize
+        write_stub(
+            self.stub_path,
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "print('部分输出')\n"
+            "sys.exit(1)\n",
+        )
+        os.environ["WORKLOG_OPENCODE"] = str(self.stub_path)
+        before = set(self._tmp_leftovers())
+        body = summarize.run_model("prompt")
+        after = set(self._tmp_leftovers())
+        self.assertIsNone(body)
+        self.assertEqual(after - before, set())
+
+    def test_timeout_returns_none_and_leaves_no_tmp(self):
+        import summarize
+        write_stub(
+            self.stub_path,
+            "#!/usr/bin/env python3\n"
+            "import time\n"
+            "time.sleep(5)\n",
+        )
+        os.environ["WORKLOG_OPENCODE"] = str(self.stub_path)
+        original_timeout = summarize.MODEL_TIMEOUT
+        summarize.MODEL_TIMEOUT = 1
+        try:
+            before = set(self._tmp_leftovers())
+            body = summarize.run_model("prompt")
+            after = set(self._tmp_leftovers())
+        finally:
+            summarize.MODEL_TIMEOUT = original_timeout
+        self.assertIsNone(body)
+        self.assertEqual(after - before, set())
+
 
 class TestDailyFallbackPath(SummarizeTestCase):
     def test_falls_back_when_model_unavailable(self):
