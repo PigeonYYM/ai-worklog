@@ -110,7 +110,7 @@ def render_weekly_fallback(dated_rows, start: datetime, end: datetime) -> str:
 
 
 def build_daily_prompt(rows, day: datetime) -> str:
-    flow = "\n".join("\t".join(row) for row in rows)
+    flow = "\n".join("\t".join(str(v) if v is not None else "" for v in row) for row in rows)
     return DAILY_PROMPT.format(
         day="{:%Y-%m-%d}".format(day),
         weekday=worklog.WEEKDAYS[day.weekday()],

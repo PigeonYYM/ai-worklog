@@ -58,7 +58,7 @@ class TestAppendAndRead(WorklogTestCase):
         when = datetime(2026, 9, 11, 19, 2)
         worklog.append_record(when, "my-repo", "做了某事", "claude")
         rows = worklog.read_day(when)
-        self.assertEqual(rows, [("19:02", "my-repo", "做了某事", "claude")])
+        self.assertEqual(rows, [("19:02", "my-repo", "做了某事", "claude", None)])
 
     def test_title_with_tab_does_not_break_columns(self):
         import worklog
@@ -106,8 +106,8 @@ class TestMigrate(WorklogTestCase):
         self.assertEqual(
             rows,
             [
-                ("17:41", "ad-platform-frontend", "配置周报 hook", "claude"),
-                ("19:02", "repo", "阶段B2：Properties 构建", "claude"),
+                ("17:41", "ad-platform-frontend", "配置周报 hook", "claude", None),
+                ("19:02", "repo", "阶段B2：Properties 构建", "claude", None),
             ],
         )
 
@@ -172,6 +172,134 @@ class TestParseLegacy(WorklogTestCase):
         import migrate_legacy
         rows = migrate_legacy.parse_legacy("- 09:05 [repo] 配置 hook（TaskCompleted → ~/daily-report）")
         self.assertEqual(rows[0][2], "配置 hook（TaskCompleted → ~/daily-report）")
+
+
+class TestDurationColumn(WorklogTestCase):
+    def test_roundtrip_with_duration(self):
+        import worklog
+        when = datetime(2026, 9, 16, 19, 2)
+        worklog.append_record(when, "my-repo", "做了某事", "claude", 4260)
+        self.assertEqual(
+            worklog.read_day(when),
+            [("19:02", "my-repo", "做了某事", "claude", 4260)],
+        )
+
+    def test_unknown_duration_is_empty_not_zero(self):
+        import worklog
+        when = datetime(2026, 9, 16, 19, 2)
+        worklog.append_record(when, "my-repo", "做了某事", "claude")
+        raw = worklog.raw_path(when).read_text(encoding="utf-8")
+        self.assertTrue(raw.rstrip("\n").endswith("\tclaude\t"))
+        self.assertIsNone(worklog.read_day(when)[0][4])
+
+    def test_zero_duration_is_preserved_as_zero(self):
+        import worklog
+        when = datetime(2026, 9, 16, 19, 2)
+        worklog.append_record(when, "my-repo", "秒完", "codex", 0)
+        self.assertEqual(worklog.read_day(when)[0][4], 0)
+
+    def test_reads_legacy_four_column_rows_as_unknown(self):
+        import worklog
+        when = datetime(2026, 9, 16, 19, 2)
+        worklog.raw_dir().mkdir(parents=True, exist_ok=True)
+        worklog.raw_path(when).write_text(
+            "19:02\trepo\t老记录\tclaude\n20:10\trepo\t新记录\tclaude\t600\n",
+            encoding="utf-8",
+        )
+        rows = worklog.read_day(when)
+        self.assertEqual(rows[0], ("19:02", "repo", "老记录", "claude", None))
+        self.assertEqual(rows[1], ("20:10", "repo", "新记录", "claude", 600))
+
+    def test_malformed_duration_becomes_unknown(self):
+        import worklog
+        when = datetime(2026, 9, 16, 19, 2)
+        worklog.raw_dir().mkdir(parents=True, exist_ok=True)
+        worklog.raw_path(when).write_text(
+            "19:02\trepo\t标题\tclaude\t不是数字\n", encoding="utf-8"
+        )
+        self.assertIsNone(worklog.read_day(when)[0][4])
+
+
+class TestMarks(WorklogTestCase):
+    def test_take_duration_without_mark_returns_none(self):
+        import worklog
+        self.assertIsNone(
+            worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        )
+
+    def test_take_duration_measures_from_previous_mark(self):
+        import worklog
+        worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        seconds = worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 30))
+        self.assertEqual(seconds, 1800)
+
+    def test_take_duration_advances_the_mark(self):
+        import worklog
+        worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 30))
+        second = worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 45))
+        self.assertEqual(second, 900)
+
+    def test_consecutive_durations_sum_to_total_elapsed(self):
+        import worklog
+        worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        first = worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 30))
+        second = worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 11, 15))
+        self.assertEqual(first + second, 75 * 60)
+
+    def test_stale_mark_returns_none_but_still_advances(self):
+        import worklog
+        worklog.set_mark("claude", "s1", datetime(2026, 9, 14, 10, 0))
+        self.assertIsNone(
+            worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        )
+        self.assertEqual(
+            worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 5)), 300
+        )
+
+    def test_backwards_clock_returns_none(self):
+        import worklog
+        worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        self.assertIsNone(
+            worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 9, 0))
+        )
+
+    def test_marks_are_isolated_per_tool_and_session(self):
+        import worklog
+        worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        self.assertIsNone(
+            worklog.take_duration("codex", "s1", datetime(2026, 9, 16, 10, 5))
+        )
+        self.assertIsNone(
+            worklog.take_duration("claude", "s2", datetime(2026, 9, 16, 10, 5))
+        )
+
+    def test_session_id_is_sanitised_into_filename(self):
+        import worklog
+        path = worklog.mark_path("claude", "../../etc/passwd")
+        self.assertEqual(path.parent, worklog.marks_dir())
+        self.assertEqual(path.name, "claude-etcpasswd.mark")
+
+    def test_empty_session_id_falls_back_to_unknown(self):
+        import worklog
+        self.assertEqual(worklog.mark_path("claude", None).name, "claude-unknown.mark")
+
+    def test_cleanup_removes_only_stale_marks(self):
+        import os as os_module
+        import time as time_module
+        import worklog
+        worklog.set_mark("claude", "old", datetime(2026, 9, 16, 10, 0))
+        worklog.set_mark("claude", "fresh", datetime(2026, 9, 16, 10, 0))
+        stale = worklog.mark_path("claude", "old")
+        long_ago = time_module.time() - 200000
+        os_module.utime(str(stale), (long_ago, long_ago))
+        self.assertEqual(worklog.cleanup_stale_marks(86400), 1)
+        self.assertFalse(stale.exists())
+        self.assertTrue(worklog.mark_path("claude", "fresh").exists())
+
+    def test_cleanup_on_missing_dir_returns_zero(self):
+        import worklog
+        self.assertEqual(worklog.cleanup_stale_marks(86400), 0)
 
 
 if __name__ == "__main__":

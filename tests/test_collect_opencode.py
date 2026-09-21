@@ -30,7 +30,7 @@ class TestCollect(CollectTestCase):
         count = collect_opencode.collect([self._row("数值表结构", "/a/game-design", when)])
         self.assertEqual(count, 1)
         rows = worklog.read_day(when)
-        self.assertEqual(rows, [("16:20", "game-design", "数值表结构", "opencode")])
+        self.assertEqual(rows, [("16:20", "game-design", "数值表结构", "opencode", None)])
 
     def test_excludes_own_report_dir(self):
         import collect_opencode
