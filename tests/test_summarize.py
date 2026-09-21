@@ -103,6 +103,30 @@ class TestBuildPrompt(SummarizeTestCase):
         self.assertIn("不要发明", prompt)
 
 
+class TestBuildWeeklyPrompt(SummarizeTestCase):
+    def test_handles_none_duration_in_weekly_prompt(self):
+        """Regression test: build_weekly_prompt must tolerate None in 5-tuple duration column.
+
+        This test would fail before the fix with:
+        TypeError: sequence item 4: expected str instance, NoneType found
+        """
+        import summarize
+        # 5-tuples with None duration (which worklog.read_day() now returns)
+        rows_with_none_duration = [
+            ("19:02", "overseas-ad-event-processor", "阶段B1：InstallEvent", "claude", None),
+            ("19:05", "overseas-ad-event-processor", "阶段B3：install handlePlatform", "claude", None),
+        ]
+        dated_rows = [
+            ("09-11", rows_with_none_duration[0]),
+            ("09-11", rows_with_none_duration[1]),
+        ]
+        # This call must not raise TypeError
+        prompt = summarize.build_weekly_prompt(dated_rows, datetime(2026, 9, 8), datetime(2026, 9, 14))
+        self.assertIn("09-11", prompt)
+        self.assertIn("InstallEvent", prompt)
+        self.assertIn("overseas-ad-event-processor", prompt)
+
+
 class TestAtomicWrite(SummarizeTestCase):
     def test_writes_and_leaves_no_tmp(self):
         import summarize

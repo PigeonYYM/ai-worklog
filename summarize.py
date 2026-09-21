@@ -119,7 +119,7 @@ def build_daily_prompt(rows, day: datetime) -> str:
 
 
 def build_weekly_prompt(dated_rows, start: datetime, end: datetime) -> str:
-    flow = "\n".join("{}\t{}".format(day_text, "\t".join(row)) for day_text, row in dated_rows)
+    flow = "\n".join("{}\t{}".format(day_text, "\t".join(str(v) if v is not None else "" for v in row)) for day_text, row in dated_rows)
     return WEEKLY_PROMPT.format(
         week="{:%G-W%V}".format(start),
         start="{:%Y-%m-%d}".format(start),
