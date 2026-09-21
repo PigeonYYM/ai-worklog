@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code TaskCompleted hook：把完成的任务写入工作流水。"""
+"""Claude Code TaskCompleted hook：把完成的任务连同耗时写入工作流水。"""
 from __future__ import annotations
 
 import json
@@ -22,12 +22,15 @@ def main() -> None:
     if not subject:
         return
 
+    now = datetime.now()
     worklog.append_record(
-        datetime.now(),
+        now,
         worklog.project_name(payload.get("cwd")),
         subject,
         "claude",
+        worklog.take_duration("claude", payload.get("session_id"), now),
     )
 
 
-main()
+if __name__ == "__main__":
+    main()
