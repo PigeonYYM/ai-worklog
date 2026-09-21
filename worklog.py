@@ -169,6 +169,12 @@ def cleanup_stale_marks(max_age_seconds: int = MARK_STALE_SECONDS) -> int:
     (tool, session_id) 创建，即便当时没有标记可读（例如 Fix1 之后，
     hook 未注册期间每次调用都是这种情况）。不清理的话这些空锁文件会
     随会话数量无限堆积。
+
+    在卸载文件前检查是否有进程持有排他锁：试图非阻塞地获取排他锁。若失败
+    表示文件被活跃使用，跳过卸载。这防止了 TOCTOU（检查-后用）攻击，其中
+    .lock 文件的 mtime 永不更新（用 'a+' 打开但从不写），导致其看起来陈旧
+    但仍被 flock 持有。卸载时如果有进程持有该 inode 的锁，新的 open() 会
+    创建新 inode，失去互斥效果。
     """
     directory = marks_dir()
     if not directory.exists():
@@ -179,6 +185,15 @@ def cleanup_stale_marks(max_age_seconds: int = MARK_STALE_SECONDS) -> int:
         for path in directory.glob(pattern):
             try:
                 if now - path.stat().st_mtime > max_age_seconds:
+                    # 试图非阻塞获取排他锁；若成功则文件未被持有，可以卸载
+                    with path.open("a+") as handle:
+                        try:
+                            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            # 成功获取锁：文件空闲，继续卸载
+                            fcntl.flock(handle, fcntl.LOCK_UN)
+                        except (BlockingIOError, OSError):
+                            # 无法获取锁：文件被活跃持有，跳过
+                            continue
                     path.unlink()
                     removed += 1
             except OSError:

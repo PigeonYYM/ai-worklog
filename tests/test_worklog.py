@@ -1,4 +1,5 @@
 import contextlib
+import fcntl
 import io
 import os
 import sys
@@ -327,6 +328,87 @@ class TestMarks(WorklogTestCase):
     def test_cleanup_on_missing_dir_returns_zero(self):
         import worklog
         self.assertEqual(worklog.cleanup_stale_marks(86400), 0)
+
+    def test_cleanup_does_not_remove_held_lock_file(self):
+        """A lock file held by an active process should not be swept.
+
+        Even if the mtime is stale (never refreshed when opened with 'a+'),
+        a file being actively locked should not be unlinked. Unlinking under
+        an active lock breaks mutual exclusion and reintroduces the race.
+        """
+        import os as os_module
+        import time as time_module
+        import worklog
+
+        # Create a lock file and backdate its mtime to look stale
+        lock_path = worklog.mark_path("claude", "held").with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.touch()
+        long_ago = time_module.time() - 200000
+        os_module.utime(str(lock_path), (long_ago, long_ago))
+
+        # Hold an exclusive lock on the file
+        with lock_path.open("a+") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                # Attempt cleanup while lock is held
+                removed = worklog.cleanup_stale_marks(86400)
+                # The held lock file should NOT have been removed
+                self.assertTrue(
+                    lock_path.exists(),
+                    "Lock file was removed while being actively held"
+                )
+                self.assertEqual(
+                    removed, 0,
+                    "cleanup_stale_marks counted a held lock as removed"
+                )
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+        # After release, a subsequent cleanup should remove it
+        removed_after = worklog.cleanup_stale_marks(86400)
+        self.assertFalse(lock_path.exists())
+        self.assertEqual(removed_after, 1)
+
+    def test_cleanup_does_not_remove_held_mark_file(self):
+        """A mark file held by an active process should not be swept.
+
+        This tests the same protection applied to .mark files: they can also
+        be opened and locked during take_duration.
+        """
+        import os as os_module
+        import time as time_module
+        import worklog
+
+        # Create a mark file and backdate its mtime
+        mark_path = worklog.mark_path("claude", "held")
+        mark_path.parent.mkdir(parents=True, exist_ok=True)
+        mark_path.write_text("0", encoding="utf-8")
+        long_ago = time_module.time() - 200000
+        os_module.utime(str(mark_path), (long_ago, long_ago))
+
+        # Hold an exclusive lock on the file
+        with mark_path.open("r") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                # Attempt cleanup while lock is held
+                removed = worklog.cleanup_stale_marks(86400)
+                # The held mark file should NOT have been removed
+                self.assertTrue(
+                    mark_path.exists(),
+                    "Mark file was removed while being actively held"
+                )
+                self.assertEqual(
+                    removed, 0,
+                    "cleanup_stale_marks counted a held mark as removed"
+                )
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+        # After release, a subsequent cleanup should remove it
+        removed_after = worklog.cleanup_stale_marks(86400)
+        self.assertFalse(mark_path.exists())
+        self.assertEqual(removed_after, 1)
 
 
 class TestMarkLocking(WorklogTestCase):

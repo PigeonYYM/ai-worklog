@@ -54,7 +54,7 @@ bash ~/worklog/install_launchd.sh                             # 重装两个 lau
 cd ~/worklog && /usr/bin/python3 -m unittest discover -s tests -v
 ```
 
-113 个测试，全部通过 `WORKLOG_HOME` 环境变量重定向到临时目录，不会碰真实的 `~/daily-report/`。
+115 个测试，全部通过 `WORKLOG_HOME` 环境变量重定向到临时目录，不会碰真实的 `~/daily-report/`。
 
 ## 排障
 
