@@ -33,8 +33,9 @@ DAILY_PROMPT = """把下面这份工作流水整合成当天日报。
 - 不要发明流水里没有的内容，不要补充推测
 - 直接输出 markdown 正文，不要前言、不要解释、不要代码块包裹
 - 第一行必须是：# {day} {weekday}
+- 时长列原样保留，不要加总、不要换算、不要编造——工时汇总由脚本另行生成
 
-流水（列依次为 时间、项目、标题、来源工具）：
+流水（列依次为 时间、项目、标题、来源工具、时长）：
 {flow}
 """
 
@@ -47,8 +48,9 @@ WEEKLY_PROMPT = """把下面这份一周的工作流水整合成周报。
 - 不要发明流水里没有的内容，不要补充推测
 - 直接输出 markdown 正文，不要前言、不要解释、不要代码块包裹
 - 第一行必须是：# {week} 周报（{start} ~ {end}）
+- 时长列原样保留，不要加总、不要换算、不要编造——工时汇总由脚本另行生成
 
-流水（列依次为 日期、时间、项目、标题、来源工具）：
+流水（列依次为 日期、时间、项目、标题、来源工具、时长）：
 {flow}
 """
 
@@ -79,6 +81,42 @@ def validate(body: str, rows) -> bool:
     return len(content_lines) >= len(projects)
 
 
+def format_hours(seconds) -> str:
+    if seconds is None:
+        return "-"
+    return "{:.1f}h".format(seconds / 3600.0)
+
+
+def record_suffix(row) -> str:
+    if row[4] is None:
+        return row[3]
+    return "{}, {}".format(row[3], format_hours(row[4]))
+
+
+def flow_row(row) -> str:
+    return "\t".join([row[0], row[1], row[2], row[3], format_hours(row[4])])
+
+
+def hours_table(rows) -> str:
+    """按项目汇总工时。数字由脚本算，绝不交给模型。"""
+    totals = {}
+    unknown = 0
+    for row in rows:
+        if row[4] is None:
+            unknown += 1
+            continue
+        totals[row[1]] = totals.get(row[1], 0) + row[4]
+    if not totals:
+        return ""
+    lines = ["## 工时", "", "| 项目 | 小时 |", "| --- | --- |"]
+    for project in sorted(totals, key=lambda name: (-totals[name], name)):
+        lines.append("| {} | {:.1f} |".format(project, totals[project] / 3600.0))
+    lines.append("| **合计** | **{:.1f}** |".format(sum(totals.values()) / 3600.0))
+    if unknown:
+        lines.extend(["", "> {} 条记录无时长，未计入。".format(unknown)])
+    return "\n".join(lines) + "\n"
+
+
 def render_fallback(rows, day: datetime) -> str:
     grouped = {}
     for row in rows:
@@ -87,7 +125,7 @@ def render_fallback(rows, day: datetime) -> str:
     for project in sorted(grouped):
         out.append("## {}".format(project))
         for row in grouped[project]:
-            out.append("- {} {} ({})".format(row[0], row[2], row[3]))
+            out.append("- {} {} ({})".format(row[0], row[2], record_suffix(row)))
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
@@ -104,13 +142,13 @@ def render_weekly_fallback(dated_rows, start: datetime, end: datetime) -> str:
     for project in sorted(grouped):
         out.append("## {}".format(project))
         for day_text, row in grouped[project]:
-            out.append("- {} {} ({})".format(day_text, row[2], row[3]))
+            out.append("- {} {} ({})".format(day_text, row[2], record_suffix(row)))
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
 def build_daily_prompt(rows, day: datetime) -> str:
-    flow = "\n".join("\t".join(str(v) if v is not None else "" for v in row) for row in rows)
+    flow = "\n".join(flow_row(row) for row in rows)
     return DAILY_PROMPT.format(
         day="{:%Y-%m-%d}".format(day),
         weekday=worklog.WEEKDAYS[day.weekday()],
@@ -119,7 +157,9 @@ def build_daily_prompt(rows, day: datetime) -> str:
 
 
 def build_weekly_prompt(dated_rows, start: datetime, end: datetime) -> str:
-    flow = "\n".join("{}\t{}".format(day_text, "\t".join(str(v) if v is not None else "" for v in row)) for day_text, row in dated_rows)
+    flow = "\n".join(
+        "{}\t{}".format(day_text, flow_row(row)) for day_text, row in dated_rows
+    )
     return WEEKLY_PROMPT.format(
         week="{:%G-W%V}".format(start),
         start="{:%Y-%m-%d}".format(start),
@@ -220,6 +260,9 @@ def daily(day: datetime) -> int:
             content = render_fallback(rows, day)
             source = "退化渲染"
         target = worklog.report_dir() / "{:%Y-%m-%d}.md".format(day)
+        table = hours_table(rows)
+        if table:
+            content = content.rstrip() + "\n\n" + table
         atomic_write(target, content)
         print("日报已写入 {}（{}，{} 条流水）".format(target, source, len(rows)))
         return 0
@@ -252,9 +295,28 @@ def weekly(day: datetime) -> int:
             content = render_weekly_fallback(dated_rows, start, end)
             source = "退化渲染"
         target = worklog.report_dir() / "weekly" / "{:%G-W%V}.md".format(start)
+        table = hours_table(rows)
+        if table:
+            content = content.rstrip() + "\n\n" + table
         atomic_write(target, content)
         print("周报已写入 {}（{}，{} 条流水）".format(target, source, len(rows)))
         return 0
+
+
+def hours_report(start: datetime, end: datetime) -> int:
+    cursor = start
+    found = False
+    while cursor <= end:
+        rows = worklog.read_day(cursor)
+        table = hours_table(rows)
+        if table:
+            found = True
+            print("## {:%Y-%m-%d} {}".format(cursor, worklog.WEEKDAYS[cursor.weekday()]))
+            print(table)
+        cursor += timedelta(days=1)
+    if not found:
+        print("区间内无记录")
+    return 0
 
 
 def main() -> int:
@@ -262,9 +324,14 @@ def main() -> int:
     parser.add_argument("--daily", action="store_true", help="生成当天日报")
     parser.add_argument("--weekly", action="store_true", help="生成本周周报")
     parser.add_argument("--date", help="指定日期 YYYY-MM-DD，默认今天")
+    parser.add_argument("--hours", action="store_true", help="输出工时汇总，不生成 md")
+    parser.add_argument("--since", help="工时汇总起始日期 YYYY-MM-DD，默认与 --date 同天")
     args = parser.parse_args()
 
     day = datetime.strptime(args.date, "%Y-%m-%d") if args.date else datetime.now()
+    if args.hours:
+        start = datetime.strptime(args.since, "%Y-%m-%d") if args.since else day
+        return hours_report(start, day)
     if args.weekly:
         return weekly(day)
     return daily(day)

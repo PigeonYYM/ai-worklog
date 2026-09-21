@@ -4,7 +4,7 @@
 
 ## 数据
 
-- `~/daily-report/.raw/YYYY-MM-DD.tsv` — 流水，append-only，**唯一真相源**。四列：时间、项目、标题、来源工具（tab 分隔）
+- `~/daily-report/.raw/YYYY-MM-DD.tsv` — 流水，append-only，**唯一真相源**。五列：时间、项目、标题、来源工具、时长秒（tab 分隔）
 - `~/daily-report/YYYY-MM-DD.md` — 日报，派生产物，每晚 21:07 全量重建
 - `~/daily-report/weekly/YYYY-Www.md` — 周报，派生产物，每周五 21:20 全量生成
 - `~/daily-report/.state/` — 水位线（`opencode.cursor`）与 launchd 日志（`daily.log`/`daily.err`）
@@ -14,6 +14,10 @@
 
 日报/周报由模型（`kimi-for-coding/k3`）把当天/当周流水按项目分组、压缩成成果描述；模型输出必须通过三条硬性校验（非空、覆盖流水条数、markdown 结构），任一条不过或调用失败就退化为纯脚本分组渲染——流水信息不会丢，只是失去模型的归纳能力。生成的 md 开头会标注走的是「模型」还是「退化渲染」。
 
+时长为空表示未知（本功能上线前的历史流水、或 hook 未触发），与 `0` 严格区分——
+汇总时未知条目不计入，并在工时表下方标注条数。时长如实记录、不封顶；只有距今
+超过 24 小时的孤儿标记才记为未知。
+
 ## 采集
 
 | 工具 | 机制 | 粒度 |
@@ -21,6 +25,10 @@
 | Claude Code | `TaskCompleted` hook → `~/worklog/claude_task.py` | 单个任务 |
 | codex | `~/.codex/hooks.json` 的 `UserPromptSubmit` + `Stop` 配对（`codex_prompt.py` / `codex_stop.py`） | 单个 turn |
 | opencode | 整合时轮询其本地 SQLite（`collect_opencode.py`），按水位线增量拉取 | 整个会话 |
+
+时长口径是「会话内上一标记点到本次记录」的差值：Claude 由 `UserPromptSubmit`
+（`claude_prompt.py`）打标记，codex 用 prompt 缓存文件的 mtime，opencode 用
+`time_created` 并按采集水位线截断。同一会话内各条时长之和等于真实流逝时间。
 
 opencode 的采集内建**自指防护**：整合任务本身也是在 `daily-report` 目录下调用 opencode，这次调用会被 opencode 记进它自己的 session 表；`collect_opencode.py` 会排除项目名为 `daily-report` 的记录，否则「生成日报」这件事会被记进第二天的日报，造成无限自指。验收时曾人为跑过一轮整合+采集，确认流水里自指行数为 0。
 
@@ -31,6 +39,7 @@ opencode 的采集内建**自指防护**：整合任务本身也是在 `daily-re
 /usr/bin/python3 ~/worklog/summarize.py --daily --date 2026-09-10   # 重建指定日期
 /usr/bin/python3 ~/worklog/summarize.py --weekly             # 生成本周周报（周一~今天/周日）
 /usr/bin/python3 ~/worklog/collect_opencode.py               # 手动拉一次 opencode 增量
+/usr/bin/python3 ~/worklog/summarize.py --hours --since 2026-09-14  # 输出工时汇总，用于填报
 bash ~/worklog/install_launchd.sh                             # 重装两个 launchd 定时任务
 ```
 
@@ -42,7 +51,7 @@ bash ~/worklog/install_launchd.sh                             # 重装两个 lau
 cd ~/worklog && /usr/bin/python3 -m unittest discover -s tests -v
 ```
 
-54 个测试，全部通过 `WORKLOG_HOME` 环境变量重定向到临时目录，不会碰真实的 `~/daily-report/`。
+100 个测试，全部通过 `WORKLOG_HOME` 环境变量重定向到临时目录，不会碰真实的 `~/daily-report/`。
 
 ## 排障
 

@@ -8,9 +8,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 ROWS = [
-    ("19:02", "overseas-ad-event-processor", "阶段B1：InstallEvent 与去重键", "claude"),
-    ("19:05", "overseas-ad-event-processor", "阶段B3：install handlePlatform", "claude"),
-    ("16:20", "game-design", "数值策划表结构", "opencode"),
+    ("19:02", "overseas-ad-event-processor", "阶段B1：InstallEvent 与去重键", "claude", 3600),
+    ("19:05", "overseas-ad-event-processor", "阶段B3：install handlePlatform", "claude", 1800),
+    ("16:20", "game-design", "数值策划表结构", "opencode", None),
 ]
 
 
@@ -284,6 +284,114 @@ class TestDailyFallbackPath(SummarizeTestCase):
             os.environ.pop("WORKLOG_SKIP_COLLECT", None)
         self.assertEqual(code, 0)
         self.assertFalse((worklog.report_dir() / "2026-09-11.md").exists())
+
+
+class TestFormatHours(SummarizeTestCase):
+    def test_converts_seconds_to_hours(self):
+        import summarize
+        self.assertEqual(summarize.format_hours(3600), "1.0h")
+        self.assertEqual(summarize.format_hours(5400), "1.5h")
+
+    def test_unknown_renders_dash(self):
+        import summarize
+        self.assertEqual(summarize.format_hours(None), "-")
+
+    def test_zero_is_not_unknown(self):
+        import summarize
+        self.assertEqual(summarize.format_hours(0), "0.0h")
+
+
+class TestHoursTable(SummarizeTestCase):
+    def test_totals_per_project(self):
+        import summarize
+        text = summarize.hours_table(ROWS)
+        self.assertIn("| overseas-ad-event-processor | 1.5 |", text)
+
+    def test_grand_total_sums_known_durations(self):
+        import summarize
+        text = summarize.hours_table(ROWS)
+        self.assertIn("**1.5**", text)
+
+    def test_unknown_rows_are_reported_not_counted_as_zero(self):
+        import summarize
+        text = summarize.hours_table(ROWS)
+        self.assertIn("1 条记录无时长", text)
+        self.assertNotIn("game-design", text)
+
+    def test_all_unknown_yields_empty_table(self):
+        import summarize
+        rows = [("09:00", "repo", "标题", "claude", None)]
+        self.assertEqual(summarize.hours_table(rows), "")
+
+
+class TestRenderFallbackDuration(SummarizeTestCase):
+    def test_shows_duration_when_known(self):
+        import summarize
+        text = summarize.render_fallback(ROWS, datetime(2026, 9, 16))
+        self.assertIn("(claude, 1.0h)", text)
+
+    def test_omits_duration_when_unknown(self):
+        import summarize
+        text = summarize.render_fallback(ROWS, datetime(2026, 9, 16))
+        self.assertIn("(opencode)", text)
+
+
+class TestPromptCarriesDuration(SummarizeTestCase):
+    def test_flow_includes_hours_column(self):
+        import summarize
+        prompt = summarize.build_daily_prompt(ROWS, datetime(2026, 9, 16))
+        self.assertIn("1.0h", prompt)
+        self.assertIn("时长", prompt)
+
+    def test_forbids_model_aggregation(self):
+        import summarize
+        prompt = summarize.build_daily_prompt(ROWS, datetime(2026, 9, 16))
+        self.assertIn("不要加总", prompt)
+
+
+class TestDailyAppendsHours(SummarizeTestCase):
+    def test_hours_section_present_even_when_model_unavailable(self):
+        import summarize
+        import worklog
+        when = datetime(2026, 9, 16, 19, 2)
+        worklog.append_record(when, "repo-a", "做了某事", "claude", 3600)
+        os.environ["WORKLOG_OPENCODE"] = "/nonexistent/opencode"
+        os.environ["WORKLOG_SKIP_COLLECT"] = "1"
+        try:
+            summarize.daily(when)
+        finally:
+            os.environ.pop("WORKLOG_OPENCODE", None)
+            os.environ.pop("WORKLOG_SKIP_COLLECT", None)
+        text = (worklog.report_dir() / "2026-09-16.md").read_text(encoding="utf-8")
+        self.assertIn("## 工时", text)
+        self.assertIn("| repo-a | 1.0 |", text)
+
+
+class TestHoursReport(SummarizeTestCase):
+    def test_prints_table_per_day(self):
+        import contextlib
+        import io
+        import summarize
+        import worklog
+        worklog.append_record(datetime(2026, 9, 15, 10, 0), "repo-a", "一", "claude", 3600)
+        worklog.append_record(datetime(2026, 9, 16, 10, 0), "repo-b", "二", "claude", 1800)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = summarize.hours_report(datetime(2026, 9, 15), datetime(2026, 9, 16))
+        out = buffer.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("2026-09-15", out)
+        self.assertIn("| repo-a | 1.0 |", out)
+        self.assertIn("| repo-b | 0.5 |", out)
+
+    def test_empty_range_reports_no_records(self):
+        import contextlib
+        import io
+        import summarize
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            summarize.hours_report(datetime(2020, 1, 1), datetime(2020, 1, 2))
+        self.assertIn("无记录", buffer.getvalue())
 
 
 if __name__ == "__main__":
