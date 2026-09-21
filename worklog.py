@@ -189,12 +189,16 @@ def cleanup_stale_marks(max_age_seconds: int = MARK_STALE_SECONDS) -> int:
                     with path.open("a+") as handle:
                         try:
                             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                            # 成功获取锁：文件空闲，继续卸载
-                            fcntl.flock(handle, fcntl.LOCK_UN)
+                            # 成功获取锁：文件空闲。必须在持有锁的期间执行 unlink()；
+                            # 若在释放锁后再 unlink()，会在 flock(LOCK_UN) 和 unlink() 之间
+                            # 形成一个竞态窗口，允许另一个进程打开同路径、获取新 inode 上的锁，
+                            # 然后被 unlink() 删除。该进程之后将持有已删除 inode 的孤立锁，
+                            # 与后续的调用者没有互斥关系。unlink() 一个已打开的文件描述符指向
+                            # 的路径是安全的（inode 会存活到描述符关闭），所以在此执行。
+                            path.unlink()
                         except (BlockingIOError, OSError):
                             # 无法获取锁：文件被活跃持有，跳过
                             continue
-                    path.unlink()
                     removed += 1
             except OSError:
                 continue
