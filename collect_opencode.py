@@ -59,7 +59,7 @@ def write_cursor(value: int) -> None:
 
 def fetch_sessions(since_ms: int) -> List[dict]:
     query = (
-        "SELECT id, directory, title, time_updated FROM session "
+        "SELECT id, directory, title, time_created, time_updated FROM session "
         "WHERE time_updated > {} ORDER BY time_updated".format(int(since_ms))
     )
     # 用临时文件接收 stdout，而不是 capture_output 的管道：
@@ -95,7 +95,23 @@ def fetch_sessions(since_ms: int) -> List[dict]:
     return payload if isinstance(payload, list) else []
 
 
-def collect(rows: List[dict]) -> int:
+def session_duration(row: dict, since_ms: int):
+    """本次采集新增的那段跨度。
+
+    水位线走 time_updated，续用旧会话会被再次采集；若按完整跨度计算，同一段
+    时间会被重复计入工时。用水位线截断起点后，多次采集的累加值仍等于会话总跨度。
+    """
+    created = int(row.get("time_created") or 0)
+    updated = int(row.get("time_updated") or 0)
+    if not created or not updated:
+        return None
+    start = max(created, int(since_ms))
+    if updated <= start:
+        return 0
+    return int((updated - start) // 1000)
+
+
+def collect(rows: List[dict], since_ms: int = 0) -> int:
     own = str(worklog.report_dir())
     written = 0
     for row in rows:
@@ -107,7 +123,13 @@ def collect(rows: List[dict]) -> int:
             continue
         epoch_ms = row.get("time_updated") or 0
         when = datetime.fromtimestamp(int(epoch_ms) / 1000.0)
-        worklog.append_record(when, worklog.project_name(directory), title, "opencode")
+        worklog.append_record(
+            when,
+            worklog.project_name(directory),
+            title,
+            "opencode",
+            session_duration(row, since_ms),
+        )
         written += 1
     return written
 
@@ -119,7 +141,7 @@ def main() -> int:
     except (subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
         print("opencode 查询失败: {}".format(exc), file=sys.stderr)
         return 1
-    written = collect(rows)
+    written = collect(rows, since)
     newest = since
     for row in rows:
         newest = max(newest, int(row.get("time_updated") or 0))
