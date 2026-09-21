@@ -109,9 +109,13 @@ def hours_table(rows) -> str:
     if not totals:
         return ""
     lines = ["## 工时", "", "| 项目 | 小时 |", "| --- | --- |"]
+    rounded_values = []
     for project in sorted(totals, key=lambda name: (-totals[name], name)):
-        lines.append("| {} | {:.1f} |".format(project, totals[project] / 3600.0))
-    lines.append("| **合计** | **{:.1f}** |".format(sum(totals.values()) / 3600.0))
+        rounded_hours = round(totals[project] / 3600.0, 1)
+        lines.append("| {} | {:.1f} |".format(project, rounded_hours))
+        rounded_values.append(rounded_hours)
+    grand_total = sum(rounded_values)
+    lines.append("| **合计** | **{:.1f}** |".format(grand_total))
     if unknown:
         lines.extend(["", "> {} 条记录无时长，未计入。".format(unknown)])
     return "\n".join(lines) + "\n"

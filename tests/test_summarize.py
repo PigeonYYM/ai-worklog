@@ -323,6 +323,27 @@ class TestHoursTable(SummarizeTestCase):
         rows = [("09:00", "repo", "标题", "claude", None)]
         self.assertEqual(summarize.hours_table(rows), "")
 
+    def test_grand_total_equals_sum_of_rounded_per_project_rows(self):
+        """Regression: displayed total must equal visible per-project sum.
+
+        Before fix: two projects with 20min (1200s) and 25min (1500s) would render
+        as 0.3 and 0.4 (visible sum 0.7), but the grand total would be 0.8
+        (rounded from unrounded 0.75h), causing a visible discrepancy.
+
+        After fix: grand total must be the sum of displayed rounded per-project values.
+        """
+        import summarize
+        rows = [
+            ("10:00", "project-a", "task 1", "claude", 1200),   # 20 min = 0.3333h → 0.3
+            ("10:20", "project-b", "task 2", "claude", 1500),   # 25 min = 0.4166h → 0.4
+        ]
+        text = summarize.hours_table(rows)
+        # Each project rounds independently for display
+        self.assertIn("| project-a | 0.3 |", text)
+        self.assertIn("| project-b | 0.4 |", text)
+        # Grand total must be the sum of those displayed rounded values: 0.3 + 0.4 = 0.7
+        self.assertIn("**0.7**", text)
+
 
 class TestRenderFallbackDuration(SummarizeTestCase):
     def test_shows_duration_when_known(self):
