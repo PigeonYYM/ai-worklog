@@ -8,6 +8,7 @@
 - `~/daily-report/YYYY-MM-DD.md` — 日报，派生产物，每晚 21:07 全量重建
 - `~/daily-report/weekly/YYYY-Www.md` — 周报，派生产物，每周五 21:20 全量生成
 - `~/daily-report/.state/` — 水位线（`opencode.cursor`）与 launchd 日志（`daily.log`/`daily.err`）
+- `~/daily-report/.state/marks/` — 各工具会话的时长起点标记（`<工具>-<会话>.mark`），放这里而不是 `/tmp` 是为了排障时可直接查看
 - `~/daily-report/.backup/` — 改造前的原始 md 备份，系统稳定运行几天后可自行删除，**目前不要动**
 
 **md 是纯派生文件，手工编辑会在下次整合时被覆盖。要保留内容请改 `.raw/` 流水，不要改 md。**
@@ -22,13 +23,15 @@
 
 | 工具 | 机制 | 粒度 |
 |---|---|---|
-| Claude Code | `TaskCompleted` hook → `~/worklog/claude_task.py` | 单个任务 |
+| Claude Code | `UserPromptSubmit` 打标记（`claude_prompt.py`）+ `TaskCompleted` → `~/worklog/claude_task.py` | 单个任务 |
 | codex | `~/.codex/hooks.json` 的 `UserPromptSubmit` + `Stop` 配对（`codex_prompt.py` / `codex_stop.py`） | 单个 turn |
 | opencode | 整合时轮询其本地 SQLite（`collect_opencode.py`），按水位线增量拉取 | 整个会话 |
 
 时长口径是「会话内上一标记点到本次记录」的差值：Claude 由 `UserPromptSubmit`
 （`claude_prompt.py`）打标记，codex 用 prompt 缓存文件的 mtime，opencode 用
-`time_created` 并按采集水位线截断。同一会话内各条时长之和等于真实流逝时间。
+`time_created` 并按采集水位线截断。同一个 turn 内各条时长之和等于该 turn
+的真实耗时（跨 turn 的空闲——用户读回答、吃饭、睡觉——被标记重置正确排除，
+不计入总和）。
 
 opencode 的采集内建**自指防护**：整合任务本身也是在 `daily-report` 目录下调用 opencode，这次调用会被 opencode 记进它自己的 session 表；`collect_opencode.py` 会排除项目名为 `daily-report` 的记录，否则「生成日报」这件事会被记进第二天的日报，造成无限自指。验收时曾人为跑过一轮整合+采集，确认流水里自指行数为 0。
 
@@ -51,7 +54,7 @@ bash ~/worklog/install_launchd.sh                             # 重装两个 lau
 cd ~/worklog && /usr/bin/python3 -m unittest discover -s tests -v
 ```
 
-100 个测试，全部通过 `WORKLOG_HOME` 环境变量重定向到临时目录，不会碰真实的 `~/daily-report/`。
+113 个测试，全部通过 `WORKLOG_HOME` 环境变量重定向到临时目录，不会碰真实的 `~/daily-report/`。
 
 ## 排障
 

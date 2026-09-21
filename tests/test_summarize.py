@@ -318,10 +318,16 @@ class TestHoursTable(SummarizeTestCase):
         self.assertIn("1 条记录无时长", text)
         self.assertNotIn("game-design", text)
 
-    def test_all_unknown_yields_empty_table(self):
+    def test_all_unknown_yields_note_without_table(self):
         import summarize
         rows = [("09:00", "repo", "标题", "claude", None)]
-        self.assertEqual(summarize.hours_table(rows), "")
+        text = summarize.hours_table(rows)
+        self.assertNotIn("## 工时", text)
+        self.assertIn("1 条记录无时长，未计入。", text)
+
+    def test_no_rows_at_all_yields_empty_string(self):
+        import summarize
+        self.assertEqual(summarize.hours_table([]), "")
 
     def test_grand_total_equals_sum_of_rounded_per_project_rows(self):
         """Regression: displayed total must equal visible per-project sum.

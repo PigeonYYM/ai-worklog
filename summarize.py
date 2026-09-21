@@ -98,7 +98,15 @@ def flow_row(row) -> str:
 
 
 def hours_table(rows) -> str:
-    """按项目汇总工时。数字由脚本算，绝不交给模型。"""
+    """按项目汇总工时。数字由脚本算，绝不交给模型。
+
+    没有任何一行的情况下返回空字符串——这才是真正的「无记录」。
+    有记录但全部时长未知时，仍要输出未知条数提示（不带表格），否则一天有
+    30 条记录、全部时长未知，会跟没有任何记录长得一模一样，掩盖了正是
+    最该被看见的过渡期/hook 未注册场景。
+    """
+    if not rows:
+        return ""
     totals = {}
     unknown = 0
     for row in rows:
@@ -107,7 +115,7 @@ def hours_table(rows) -> str:
             continue
         totals[row[1]] = totals.get(row[1], 0) + row[4]
     if not totals:
-        return ""
+        return "> {} 条记录无时长，未计入。\n".format(unknown)
     lines = ["## 工时", "", "| 项目 | 小时 |", "| --- | --- |"]
     rounded_values = []
     for project in sorted(totals, key=lambda name: (-totals[name], name)):

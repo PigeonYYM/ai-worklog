@@ -23,12 +23,16 @@ def main() -> None:
         return
 
     now = datetime.now()
+    try:
+        duration = worklog.take_duration("claude", payload.get("session_id"), now)
+    except OSError:
+        duration = None
     worklog.append_record(
         now,
         worklog.project_name(payload.get("cwd")),
         subject,
         "claude",
-        worklog.take_duration("claude", payload.get("session_id"), now),
+        duration,
     )
 
 

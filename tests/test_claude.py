@@ -51,6 +51,19 @@ class TestClaudePrompt(ClaudeHookTestCase):
         )
         self.assertEqual(result.returncode, 0)
 
+    def test_mark_write_failure_does_not_crash_the_hook(self):
+        # 这个 hook 在每次回车时跑，是最不该崩的地方。用 .state/marks 被一个
+        # 普通文件占位来制造 set_mark 里 mkdir 必然失败的场景（marks_dir()
+        # 无条件调用 mkdir，不像 take_duration 那样受 Fix1 的存在性短路保护）。
+        import worklog
+        worklog.state_dir().mkdir(parents=True, exist_ok=True)
+        (worklog.state_dir() / "marks").write_text("不是目录", encoding="utf-8")
+
+        result = self.run_hook("claude_prompt.py", {"session_id": "abc", "cwd": "/a/repo"})
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "")
+
 
 class TestClaudeTask(ClaudeHookTestCase):
     def test_records_duration_since_mark(self):
@@ -78,6 +91,40 @@ class TestClaudeTask(ClaudeHookTestCase):
         self.assertEqual(result.returncode, 0)
         rows = worklog.read_day(datetime.now())
         self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0][4])
+
+    def test_missing_session_id_still_writes_record_with_unknown_duration(self):
+        # session_id 缺失不该变成所有会话共享的 claude-unknown.mark 桶
+        # （Fix3），但更重要的是：这条记录本身必须照样写进流水。
+        import worklog
+        result = self.run_hook(
+            "claude_task.py",
+            {"cwd": "/a/my-repo", "task_subject": "没有 session_id 也要记"},
+        )
+        self.assertEqual(result.returncode, 0)
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][2], "没有 session_id 也要记")
+        self.assertIsNone(rows[0][4])
+
+    def test_mark_write_failure_does_not_destroy_the_record(self):
+        # take_duration 内部对标记文件的 mkdir/写入可能因 OSError 失败
+        # （权限、磁盘满、.state/marks 被一个同名文件占位）。这是次要的时长
+        # 功能，绝不能连累主功能——流水记录本身必须照样写入。用 .state/marks
+        # 是一个普通文件来制造 mkdir 必然失败的场景。
+        import worklog
+        worklog.state_dir().mkdir(parents=True, exist_ok=True)
+        (worklog.state_dir() / "marks").write_text("不是目录", encoding="utf-8")
+
+        result = self.run_hook(
+            "claude_task.py",
+            {"session_id": "abc", "cwd": "/a/my-repo", "task_subject": "标记层故障也要记"},
+        )
+
+        self.assertEqual(result.returncode, 0)
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][2], "标记层故障也要记")
         self.assertIsNone(rows[0][4])
 
     def test_empty_subject_writes_nothing(self):

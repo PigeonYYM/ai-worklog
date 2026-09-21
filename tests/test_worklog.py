@@ -227,6 +227,14 @@ class TestMarks(WorklogTestCase):
             worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 0))
         )
 
+    def test_take_duration_without_mark_creates_no_mark_file(self):
+        # 第一条记录（或起点 hook 从没跑过）不该凭空产生一个基线，
+        # 否则后面的记录会被错误地拴到这个假基线上，吃掉用户离开电脑的时间。
+        import worklog
+        worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 10, 0))
+        self.assertFalse(worklog.mark_path("claude", "s1").exists())
+        self.assertIsNone(worklog.read_mark("claude", "s1"))
+
     def test_take_duration_measures_from_previous_mark(self):
         import worklog
         worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
@@ -264,6 +272,25 @@ class TestMarks(WorklogTestCase):
             worklog.take_duration("claude", "s1", datetime(2026, 9, 16, 9, 0))
         )
 
+    def test_missing_session_id_is_unmeasurable_not_shared_bucket(self):
+        # safe_token(None) -> "unknown" 会让所有缺 session_id 的调用共享同一个
+        # 标记文件（claude-unknown.mark）。take_duration 必须在碰标记文件之前
+        # 就短路，否则不相关的任务会被串到同一条基线上，产生看似正常、实则
+        # 跨会话乱配的时长。
+        import worklog
+        self.assertIsNone(
+            worklog.take_duration("claude", None, datetime(2026, 9, 16, 10, 0))
+        )
+        self.assertIsNone(worklog.read_mark("claude", None))
+        self.assertFalse(worklog.mark_path("claude", None).exists())
+
+    def test_empty_string_session_id_is_unmeasurable(self):
+        import worklog
+        self.assertIsNone(
+            worklog.take_duration("claude", "", datetime(2026, 9, 16, 10, 0))
+        )
+        self.assertFalse(worklog.mark_path("claude", "").exists())
+
     def test_marks_are_isolated_per_tool_and_session(self):
         import worklog
         worklog.set_mark("claude", "s1", datetime(2026, 9, 16, 10, 0))
@@ -300,6 +327,60 @@ class TestMarks(WorklogTestCase):
     def test_cleanup_on_missing_dir_returns_zero(self):
         import worklog
         self.assertEqual(worklog.cleanup_stale_marks(86400), 0)
+
+
+class TestMarkLocking(WorklogTestCase):
+    def test_concurrent_take_duration_does_not_observe_same_previous_mark(self):
+        # Claude Code 并行跑 Task 子代理时，一批任务几乎同时完成，会在几十毫秒
+        # 内并发调用 take_duration。不加锁的话两边都可能在对方写入前读到同一个
+        # previous，把同一段区间记两遍，日总时长超过墙钟时间。
+        #
+        # 用真实线程 + 在 read_mark 里插入人为延迟来稳定地制造竞态窗口（比裸跑
+        # 两个进程去赌调度时机要可靠得多，同时仍然走真实的 read/写文件路径，
+        # 而不是只断言调用过 flock）。
+        import threading
+        import time as time_module
+        import worklog
+
+        base = datetime(2026, 9, 16, 10, 0)
+        worklog.set_mark("claude", "s1", base)
+
+        now_a = datetime(2026, 9, 16, 10, 30)  # previous 为 base 时应得 1800
+        now_b = datetime(2026, 9, 16, 10, 45)  # previous 为 base 时应得 2700
+        offset_a = int((now_a - base).total_seconds())
+        offset_b = int((now_b - base).total_seconds())
+
+        original_read_mark = worklog.read_mark
+
+        def slow_read_mark(tool, session_id):
+            value = original_read_mark(tool, session_id)
+            time_module.sleep(0.05)
+            return value
+
+        results = {}
+
+        def worker(key, now):
+            results[key] = worklog.take_duration("claude", "s1", now)
+
+        worklog.read_mark = slow_read_mark
+        try:
+            t1 = threading.Thread(target=worker, args=("a", now_a))
+            t2 = threading.Thread(target=worker, args=("b", now_b))
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+        finally:
+            worklog.read_mark = original_read_mark
+
+        # 竞态发生时两边都会以 base 为 previous，结果恰好等于各自到 base 的
+        # 偏移量；串行化正确时，后写入的一方必然看到前一方推进后的标记，
+        # 不可能两边都精确等于 (now - base)。
+        both_saw_base = results["a"] == offset_a and results["b"] == offset_b
+        self.assertFalse(
+            both_saw_base,
+            "两个并发调用都以同一个 previous 标记计算出了时长: {}".format(results),
+        )
 
 
 if __name__ == "__main__":

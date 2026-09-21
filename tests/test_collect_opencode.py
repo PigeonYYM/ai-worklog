@@ -104,6 +104,64 @@ class TestSessionDuration(CollectTestCase):
         self.assertEqual(rows[0][4], 1800)
 
 
+class TestAsInt(CollectTestCase):
+    def test_valid_values_convert(self):
+        import collect_opencode
+        self.assertEqual(collect_opencode._as_int(42), 42)
+        self.assertEqual(collect_opencode._as_int("42"), 42)
+
+    def test_garbage_becomes_zero(self):
+        import collect_opencode
+        self.assertEqual(collect_opencode._as_int("not-a-number"), 0)
+        self.assertEqual(collect_opencode._as_int(None), 0)
+        self.assertEqual(collect_opencode._as_int({}), 0)
+
+
+class TestGarbageTimestampDoesNotAbortCollection(CollectTestCase):
+    def test_one_bad_row_does_not_stop_the_rest_from_being_collected(self):
+        # 修复前：session_duration/collect 里的裸 int() 在垃圾字符串上抛
+        # ValueError，collect() 又不在 main() 的 try/except 保护范围内，会
+        # 中断整个循环——已写入的行留下、水位线不推进，下次同一批行被重复
+        # 拉取、重复写入流水，天天重复计入工时。
+        import collect_opencode
+        import worklog
+        from datetime import datetime
+
+        good_when_ms = int(datetime(2026, 9, 16, 15, 0).timestamp() * 1000)
+        rows = [
+            {
+                "id": "bad",
+                "directory": "/a/broken-repo",
+                "title": "垃圾时间戳",
+                "time_created": "not-a-number",
+                "time_updated": "also-not-a-number",
+            },
+            {
+                "id": "good",
+                "directory": "/a/game-design",
+                "title": "正常会话",
+                "time_created": good_when_ms - 1_800_000,
+                "time_updated": good_when_ms,
+            },
+        ]
+
+        written = collect_opencode.collect(rows, 0)
+
+        self.assertEqual(written, 2)
+        good_rows = worklog.read_day(datetime(2026, 9, 16))
+        self.assertEqual(len(good_rows), 1)
+        self.assertEqual(good_rows[0][2], "正常会话")
+        self.assertEqual(good_rows[0][4], 1800)
+
+    def test_garbage_time_updated_in_watermark_loop_does_not_raise(self):
+        import collect_opencode
+        rows = [{"time_updated": "not-a-number"}]
+        newest = 0
+        for row in rows:
+            newest = max(newest, collect_opencode._as_int(row.get("time_updated") or 0))
+        self.assertEqual(newest, 0)
+
+
 class TestCursor(CollectTestCase):
     def test_defaults_to_zero(self):
         import collect_opencode

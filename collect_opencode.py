@@ -95,14 +95,28 @@ def fetch_sessions(since_ms: int) -> List[dict]:
     return payload if isinstance(payload, list) else []
 
 
+def _as_int(value) -> int:
+    """安全转 int，垃圾值一律当 0，绝不让单行脏数据中断整批采集。
+
+    采集失败的后果不是「少记一条」那么轻：collect() 不进 main() 的 try/except
+    保护范围，一条 ValueError 会让整个循环提前退出——已写入 worklog 的行留下、
+    水位线却不会被推进，下次运行同一批行会被重新拉取、重复写入流水，
+    从而重复计入工时，且每晚都会再犯一次。
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def session_duration(row: dict, since_ms: int):
     """本次采集新增的那段跨度。
 
     水位线走 time_updated，续用旧会话会被再次采集；若按完整跨度计算，同一段
     时间会被重复计入工时。用水位线截断起点后，多次采集的累加值仍等于会话总跨度。
     """
-    created = int(row.get("time_created") or 0)
-    updated = int(row.get("time_updated") or 0)
+    created = _as_int(row.get("time_created") or 0)
+    updated = _as_int(row.get("time_updated") or 0)
     if not created or not updated:
         return None
     start = max(created, int(since_ms))
@@ -122,7 +136,7 @@ def collect(rows: List[dict], since_ms: int = 0) -> int:
         if directory == own:
             continue
         epoch_ms = row.get("time_updated") or 0
-        when = datetime.fromtimestamp(int(epoch_ms) / 1000.0)
+        when = datetime.fromtimestamp(_as_int(epoch_ms) / 1000.0)
         worklog.append_record(
             when,
             worklog.project_name(directory),
@@ -144,7 +158,7 @@ def main() -> int:
     written = collect(rows, since)
     newest = since
     for row in rows:
-        newest = max(newest, int(row.get("time_updated") or 0))
+        newest = max(newest, _as_int(row.get("time_updated") or 0))
     if newest > since:
         write_cursor(newest)
     print("opencode 采集 {} 条，水位线 {}".format(written, newest))
