@@ -118,5 +118,58 @@ class TestCleanupStale(CodexTestCase):
         self.assertTrue(fresh.exists())
 
 
+class TestCodexDuration(CodexTestCase):
+    def test_duration_measured_from_cache_mtime(self):
+        import os as os_module
+        import time as time_module
+        import codex_prompt
+        import codex_stop
+        import worklog
+        from datetime import datetime
+
+        payload = {"session_id": "sess-1", "cwd": "/a/my-repo"}
+        cache = codex_prompt.cache_path("sess-1")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text("重构转化回传", encoding="utf-8")
+        started = time_module.time() - 900
+        os_module.utime(str(cache), (started, started))
+
+        codex_stop.main_with_payload(payload)
+
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][3], "codex")
+        self.assertGreaterEqual(rows[0][4], 890)
+        self.assertLessEqual(rows[0][4], 910)
+
+    def test_stale_cache_yields_unknown_duration(self):
+        import os as os_module
+        import time as time_module
+        import codex_prompt
+        import codex_stop
+        import worklog
+        from datetime import datetime
+
+        cache = codex_prompt.cache_path("sess-2")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text("很久以前的输入", encoding="utf-8")
+        long_ago = time_module.time() - 200000
+        os_module.utime(str(cache), (long_ago, long_ago))
+
+        codex_stop.main_with_payload({"session_id": "sess-2", "cwd": "/a/my-repo"})
+
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0][4])
+
+    def test_safe_session_id_delegates_to_worklog(self):
+        import codex_prompt
+        import worklog
+        self.assertEqual(
+            codex_prompt.safe_session_id("../../etc/passwd"),
+            worklog.safe_token("../../etc/passwd"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import worklog
+
 PREFIX = "worklog-codex-"
 
 
@@ -23,8 +25,7 @@ def cache_dir() -> Path:
 
 
 def safe_session_id(raw) -> str:
-    cleaned = UNSAFE.sub("", str(raw or ""))
-    return cleaned or "unknown"
+    return worklog.safe_token(raw)
 
 
 def cache_path(session_id) -> Path:
