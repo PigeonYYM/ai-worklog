@@ -1,8 +1,10 @@
 # ai-worklog
 
-跨工具 AI 编码工作日志：Claude Code / codex / opencode 完成工作时自动记入统一流水，定时整合成日报与周报，可关联 TAPD 需求、汇总工时。
+[中文文档](README.zh-CN.md)
 
-## 安装
+Cross-tool worklog for AI coding assistants: Claude Code, Codex and OpenCode sessions are captured into a unified stream automatically, then compiled into daily and weekly reports — with optional TAPD requirement linking and work-hour summaries.
+
+## Installation
 
 ```bash
 git clone git@github.com:PigeonYYM/ai-worklog.git
@@ -10,105 +12,109 @@ cd ai-worklog
 ./install.py
 ```
 
-安装脚本是交互式的，逐项确认（都有默认值，回车即接受）：
+The installer is interactive; every step has a default (press Enter to accept):
 
-1. **为哪些工具注册 hook**（自动探测本机已装的工具）
-2. **Claude Code 记录粒度**（三档，与流水产出量强相关）：
-   - `detailed` —— 每个 turn + 每个任务清单项都记录（最密）
-   - `balanced` —— 每个 turn 记一条（适中）
-   - `minimal` —— 仅任务清单项完成时记录（最精简，不用清单的大任务会漏记）
-3. **数据目录**（默认 `~/daily-report`）
-4. **整合模型**（默认空 = 用 opencode 配置的默认模型；也可事后设 `WORKLOG_MODEL`）
-5. **日报/周报生成时间**（默认每天 21:07、每周五 21:20）
-6. **是否启用 TAPD 需求关联**
+1. **Which tools to register hooks for** (auto-detected on your machine)
+2. **Claude Code recording granularity** (three levels, directly controls record volume):
+   - `detailed` — record every turn *and* every completed task-list item (densest)
+   - `balanced` — one record per turn
+   - `minimal` — only completed task-list items (sparsest; big tasks without a task list won't be recorded)
+3. **Data directory** (default `~/daily-report`)
+4. **Summarization model** (default empty = use opencode's configured default model; can also be set later via `WORKLOG_MODEL`)
+5. **Daily/weekly report times** (default daily 21:07, Friday 21:20)
+6. **Enable TAPD requirement linking** (y/n)
 
-非交互安装：`./install.py --yes` 全部默认，或用 `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd` 旗标指定（见 `./install.py --help`）。
+Non-interactive install: `./install.py --yes` for all defaults, or use `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd` flags (see `./install.py --help`).
 
-要求：macOS（定时任务用 launchd；Linux 会打印等效 crontab 示例自行安装）、`opencode` CLI（整合与采集都依赖它）、Python 3.9+（系统自带即可）。
+Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines for manual setup), the `opencode` CLI (used for both summarization and session collection), Python 3.9+ (system Python is fine).
 
-## 更新
+## Updating
 
 ```bash
 git pull && ./install.py
 ```
 
-安装脚本是幂等的：旧 hook 条目会被替换为新路径，定时任务重新加载，配置逐项确认（已装的工具、时间等可直接回车跳过）。
+The installer is idempotent: stale hook entries are replaced with the new paths, scheduled jobs are reloaded, and every config step can be skipped with Enter to keep the default.
 
-## 卸载
+## Uninstalling
 
 ```bash
 ./install.py uninstall
 ```
 
-移除 hooks 注册与定时任务，**不动数据目录**（流水、日报、周报都保留）。
+Removes hook registrations and scheduled jobs. **Your data directory is left untouched** (stream, daily and weekly reports all remain).
 
-## 数据
+## Data
 
-- `<数据目录>/.raw/YYYY-MM-DD.tsv` — 流水，append-only，**唯一真相源**。五列：时间、项目、标题、来源工具、时长秒（tab 分隔）
-- `<数据目录>/YYYY-MM-DD.md` — 日报，派生产物，每晚全量重建
-- `<数据目录>/weekly/YYYY-Www.md` — 周报，派生产物，每周生成
-- `<数据目录>/.state/` — 水位线（`opencode.cursor`）、launchd 日志、TAPD 关联状态（`tapd_links.json` / `tapd_pending.json`）
-- `<数据目录>/.state/marks/` — 各工具会话的时长起点标记（`<工具>-<会话>.mark`）
+- `<data-dir>/.raw/YYYY-MM-DD.tsv` — the stream, append-only, **the single source of truth**. Five tab-separated columns: time, project, title, source tool, duration in seconds
+- `<data-dir>/YYYY-MM-DD.md` — daily report, a derived artifact, fully rebuilt every night
+- `<data-dir>/weekly/YYYY-Www.md` — weekly report, a derived artifact, built weekly
+- `<data-dir>/.state/` — watermarks (`opencode.cursor`), launchd logs, TAPD linking state (`tapd_links.json` / `tapd_pending.json`)
+- `<data-dir>/.state/marks/` — per-session duration start marks (`<tool>-<session>.mark`)
 
-**md 是纯派生文件，手工编辑会在下次整合时被覆盖。要保留内容请改 `.raw/` 流水，不要改 md。**
+**The md files are pure derivatives — manual edits are overwritten on the next build. To preserve content, edit the `.raw/` stream, never the md.**
 
-日报/周报由模型把当天/当周流水按项目分组、压缩成成果描述；模型输出必须通过三条硬性校验（非空、覆盖流水条数、markdown 结构），任一条不过或调用失败就退化为纯脚本分组渲染——流水信息不会丢，只是失去模型的归纳能力。
+Reports are produced by a model that groups the day's/week's stream by project and compresses it into outcome descriptions. Model output must pass three hard validations (non-empty, covers all stream rows, markdown structure); any failure — or a failed model call — degrades to a plain scripted grouped render. No stream data is ever lost; only the model's summarization ability is.
 
-时长为空表示未知（hook 未触发等），与 `0` 严格区分——汇总时未知条目不计入，并在工时表下方标注条数。时长如实记录、不封顶；只有距今超过 24 小时的孤儿标记才记为未知。
+An empty duration means unknown (hook didn't fire, etc.) and is strictly distinct from `0` — unknown rows are excluded from totals, with a note under the hours table. Durations are recorded honestly with no cap; only orphaned marks older than 24 hours degrade to unknown.
 
-## 采集
+## Collection
 
-| 工具 | 机制 | 粒度 |
+| Tool | Mechanism | Granularity |
 |---|---|---|
-| Claude Code | `UserPromptSubmit` 打标记+缓存输入（`claude_prompt.py`）；`Stop` 记 turn（`claude_stop.py`）+ `TaskCompleted` 记清单项（`claude_task.py`），粒度由安装档位决定 | 单个 turn / 单个任务 |
-| codex | `~/.codex/hooks.json` 的 `UserPromptSubmit` + `Stop` 配对（`codex_prompt.py` / `codex_stop.py`） | 单个 turn |
-| opencode | 整合时轮询其本地 SQLite（`collect_opencode.py`），按水位线增量拉取 | 整个会话 |
+| Claude Code | `UserPromptSubmit` sets mark + caches input (`claude_prompt.py`); `Stop` records turns (`claude_stop.py`) + `TaskCompleted` records task items (`claude_task.py`); granularity set by the install level | per turn / per task |
+| Codex | `UserPromptSubmit` + `Stop` pair in `~/.codex/hooks.json` (`codex_prompt.py` / `codex_stop.py`) | per turn |
+| OpenCode | polls its local SQLite at summarize time (`collect_opencode.py`), incremental via watermark | per session |
 
-Claude 的 Stop 与 TaskCompleted 共用同一条会话标记链：turn 内完成的清单项
-各自分段计时，Stop 拿走剩余尾段，同一个 turn 里所有记录的时长之和等于该
-turn 的真实耗时，不重不漏。跨 turn 的空闲（读回答、吃饭、睡觉）被标记重置
-正确排除，不计入总和。
+**Why granularity differs per tool**: the ceiling is whatever hook events each tool
+exposes. Claude Code offers both Stop (per turn) and TaskCompleted (per task item);
+Codex only has the UserPromptSubmit/Stop pair, so per-turn is the finest available;
+OpenCode's plugin events (session.idle) fire per turn but carry only a sessionID —
+no title — so recording them would just spam duplicate same-title rows. Polling at
+session level is a deliberate choice: better coarse than noisy.
 
-opencode 的采集内建**自指防护**：整合任务本身也是在数据目录下调用 opencode，这次调用会被 opencode 记进它自己的 session 表；`collect_opencode.py` 会排除项目名为数据目录名的记录，否则「生成日报」这件事会被记进第二天的日报，造成无限自指。
+Claude's Stop and TaskCompleted share one session mark chain: task items completed mid-turn each take their segment, Stop takes the remainder — the durations within a single turn sum to its true elapsed time, with no double counting. Idle time between turns (reading answers, meals, sleep) is correctly excluded by mark resets.
 
-## TAPD 需求关联
+OpenCode collection has a built-in **self-reference guard**: the summarize job itself runs opencode inside the data directory, and that call lands in opencode's own session table; `collect_opencode.py` excludes records whose project name matches the data directory, otherwise "generating the daily report" would appear in tomorrow's report — infinite self-reference.
 
-把 `tapd_my_tasks.md` 放到 `<数据目录>/tapd_task/` 即自动启用（安装时也可整体关闭，或设 `WORKLOG_TAPD=off`）。清单中「进行中」「待处理」两组的条目作为候选注入模型 prompt：强关联（渠道/功能/游戏名明确对应）的成果条目后标注 `（关联需求：标题 [ID]）`；模型拿不准的条目进入 `.state/tapd_pending.json` 待确认队列，并在 md 末尾加脚注提示。标注的 ID 会按候选集校验，幻觉 ID 一律剥掉。
+## TAPD Requirement Linking
 
-```bash
-/usr/bin/python3 <仓库目录>/summarize.py --link   # 交互确认待关联队列，确认后自动重建受影响的日报/周报
-```
-
-确认结果（含「无关联」）存在 `.state/tapd_links.json`，重建时注入 prompt，结论持久有效。模型不可用走退化渲染时不做关联、不动队列。
-
-## 手动操作
+Drop `tapd_my_tasks.md` into `<data-dir>/tapd_task/` to auto-enable (can also be disabled at install time, or via `WORKLOG_TAPD=off`). Items in the "进行中" (in-progress) and "待处理" (pending) groups are injected into the model prompt as candidates: outcomes with a strong association (channel/feature/game-name keyword match) get annotated as `（关联需求：标题 [ID]）`; items the model is unsure about go into the `.state/tapd_pending.json` queue with a footer note in the report. Annotated IDs are validated against the candidate set — hallucinated IDs are stripped.
 
 ```bash
-/usr/bin/python3 summarize.py --daily              # 重建今天日报
-/usr/bin/python3 summarize.py --daily --date 2026-09-10   # 重建指定日期
-/usr/bin/python3 summarize.py --weekly             # 生成本周周报（周一~今天）
-/usr/bin/python3 collect_opencode.py               # 手动拉一次 opencode 增量
-/usr/bin/python3 summarize.py --hours --since 2026-09-14  # 输出工时汇总，用于填报
-/usr/bin/python3 summarize.py --link               # 确认待关联的 TAPD 需求
-./install.py                                       # 重装/重配 hooks 与定时任务
+/usr/bin/python3 <repo-dir>/summarize.py --link   # interactively resolve the pending queue, then auto-rebuild affected reports
 ```
 
-`summarize.py` 内部会先调用一次 `collect_opencode.py` 再整合，所以单独手动跑 `--daily`/`--weekly` 已经包含最新的 opencode 数据。
+Confirmations (including "no association") persist in `.state/tapd_links.json` and are injected into the prompt on rebuild. The degraded fallback render does no linking and doesn't touch the queue.
 
-## 测试
+## Manual Operations
+
+```bash
+/usr/bin/python3 summarize.py --daily              # rebuild today's report
+/usr/bin/python3 summarize.py --daily --date 2026-09-10   # rebuild a specific date
+/usr/bin/python3 summarize.py --weekly             # build this week's report (Monday~today)
+/usr/bin/python3 collect_opencode.py               # pull opencode increments manually
+/usr/bin/python3 summarize.py --hours --since 2026-09-14  # print hours summary, for timesheets
+/usr/bin/python3 summarize.py --link               # resolve pending TAPD links
+./install.py                                       # reinstall / reconfigure hooks and jobs
+```
+
+`summarize.py` runs `collect_opencode.py` before summarizing, so a manual `--daily`/`--weekly` always includes the latest opencode data.
+
+## Tests
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-全部测试通过 `WORKLOG_HOME` 环境变量与临时 HOME 重定向到临时目录，不会碰真实数据与配置。
+All tests redirect via the `WORKLOG_HOME` environment variable and a temporary HOME — real data and configs are never touched.
 
-## 排障
+## Troubleshooting
 
-- **日报/周报没更新**：先看 `<数据目录>/.state/daily.err`，再用 `launchctl list | grep worklog` 确认两个任务已加载、上次退出码是 0。
-- **整合退化成分组渲染而非模型**：原因通常是模型不可用（网络/鉴权）或输出没通过三条硬性校验。流水本身完好，改天/重跑一次即可，不用管 md——它随时可从流水重建。
-- **opencode 漏记某次会话**：检查 `<数据目录>/.state/opencode.cursor` 水位线是否被意外提前推进过（比如手动跑过一次采集又没让它整合），必要时直接编辑回退时间戳，下次采集会重新扫描。
-- **怀疑流水本身丢数据**：不要慌，`.raw/*.tsv` 是唯一真相源、只增不改。任何 md 都能删了重新生成来验证。
-- **待确认关联一直挂在日报里**：说明 `.state/tapd_pending.json` 里有没处理的条目，跑一次 `--link` 逐条确认（或把对应 scope 从文件里删掉）后脚注就会消失。若怀疑是模型反复把同一条目标成待确认，确认一次「无关联」即可永久否决。
-- **自指风险复发**（日报里出现数据目录项目的条目）：说明 `collect_opencode.py` 里的排除逻辑失效了，需要重新检查该脚本对项目名的过滤条件。
-- **换了仓库位置**：`git pull` 移动目录后重跑一次 `./install.py`，hooks 里的旧路径会被替换，定时任务会指向新位置。
+- **Reports not updating**: check `<data-dir>/.state/daily.err` first, then `launchctl list | grep worklog` to confirm both jobs are loaded with exit code 0.
+- **Summarize degraded to grouped render instead of model**: usually the model is unavailable (network/auth) or its output failed the three hard validations. The stream is intact — rerun another day; the md can always be rebuilt from the stream.
+- **An opencode session wasn't recorded**: check whether the watermark in `<data-dir>/.state/opencode.cursor` was accidentally advanced (e.g. a manual collect without a summarize). Edit it back to an earlier timestamp; the next collect rescans.
+- **Suspect stream data loss**: don't panic — `.raw/*.tsv` is append-only and the single source of truth. Any md can be deleted and regenerated to verify.
+- **Pending-link footer stuck in the daily report**: `.state/tapd_pending.json` has unresolved entries. Run `--link` once (or delete the scope from the file). If the model keeps re-flagging the same item, confirm "no association" once to veto it permanently.
+- **Self-reference regression** (rows from the data-directory project appear in reports): the exclusion logic in `collect_opencode.py` has broken — re-check its project-name filter.
+- **Moved the repo**: after relocating, rerun `./install.py` — stale hook paths are replaced and scheduled jobs are pointed at the new location.
