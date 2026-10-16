@@ -6,40 +6,53 @@
 
 ## 安装
 
+三种方式任选，都会引导你完成同样的交互式配置（工具选择、Claude 记录粒度、数据目录、模型、日报/周报时间、TAPD 开关）：
+
+### 方式 A：npx 一键（推荐，免 clone）
+
+```bash
+npx -y git+ssh://git@github.com:PigeonYYM/ai-worklog.git
+```
+
+前提：本机有 node/npm（用 Claude Code 必有）、你有这个私有仓库的访问权限（走你已有的 GitHub SSH key）。运行脚本会被物化到 `~/.ai-worklog/`，hooks 与定时任务都指向这个稳定目录。非交互可加 `--yes` 及 `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd/--tools` 旗标。
+
+### 方式 B：Claude Code 插件市场（hooks 随插件版本自动更新）
+
+在 Claude Code 里执行：
+
+```
+/plugin marketplace add PigeonYYM/ai-worklog
+/plugin install ai-worklog@ai-worklog
+```
+
+然后运行 `/ai-worklog:setup`，由它引导完成定时任务与其余配置。
+约束：数据目录固定 `~/daily-report`、记录粒度固定 `detailed`（插件 hooks 运行在版本化缓存目录、读不到自定义环境变量）；需要自定义请用方式 A 或 C。
+
+### 方式 C：git clone（开发者/维护者）
+
 ```bash
 git clone git@github.com:PigeonYYM/ai-worklog.git
 cd ai-worklog
 ./install.py
 ```
 
-安装脚本是交互式的，逐项确认（都有默认值，回车即接受）：
-
-1. **为哪些工具注册 hook**（自动探测本机已装的工具）
-2. **Claude Code 记录粒度**（三档，与流水产出量强相关）：
-   - `detailed` —— 每个 turn + 每个任务清单项都记录（最密）
-   - `balanced` —— 每个 turn 记一条（适中）
-   - `minimal` —— 仅任务清单项完成时记录（最精简，不用清单的大任务会漏记）
-3. **数据目录**（默认 `~/daily-report`）
-4. **整合模型**（默认空 = 用 opencode 配置的默认模型；也可事后设 `WORKLOG_MODEL`）
-5. **日报/周报生成时间**（默认每天 21:07、每周五 21:20）
-6. **是否启用 TAPD 需求关联**
-
-非交互安装：`./install.py --yes` 全部默认，或用 `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd` 旗标指定（见 `./install.py --help`）。
+原地注册，改代码即时生效。
 
 要求：macOS（定时任务用 launchd；Linux 会打印等效 crontab 示例自行安装）、`opencode` CLI（整合与采集都依赖它）、Python 3.9+（系统自带即可）。
 
 ## 更新
 
-```bash
-git pull && ./install.py
-```
+- 方式 A：重跑同一条 npx 命令（物化覆盖 `~/.ai-worklog/`，hooks 指向不变）
+- 方式 B：`/plugin` 里更新插件后重跑一次 `/ai-worklog:setup`
+- 方式 C：`git pull && ./install.py`
 
-安装脚本是幂等的：旧 hook 条目会被替换为新路径，定时任务重新加载，配置逐项确认（已装的工具、时间等可直接回车跳过）。
+安装脚本幂等：旧 hook 条目会被替换，定时任务重新加载，配置逐项回车即保持默认。
 
 ## 卸载
 
 ```bash
-./install.py uninstall
+/usr/bin/python3 ~/.ai-worklog/install.py uninstall   # 方式 A/B（插件本体再到 /plugin 卸载）
+./install.py uninstall                                # 方式 C
 ```
 
 移除 hooks 注册与定时任务，**不动数据目录**（流水、日报、周报都保留）。

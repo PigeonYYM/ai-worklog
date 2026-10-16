@@ -173,7 +173,7 @@ class TestCollectConfig(InstallTestCase):
         import argparse
         base = dict(yes=True, data_dir=None, model=None, daily_time=None,
                     weekly_time=None, weekly_day=None, claude_level=None,
-                    no_tapd=False, uninstall=False, action=None)
+                    no_tapd=False, tools=None, uninstall=False, action=None)
         base.update(overrides)
         return argparse.Namespace(**base)
 
@@ -200,6 +200,59 @@ class TestCollectConfig(InstallTestCase):
         args = self.make_args(daily_time="25:00")
         with self.assertRaises(ValueError):
             install.collect_config(args, input_fn=lambda p: "")
+
+    def test_tools_flag_limits_registration(self):
+        config = install.collect_config(self.make_args(tools="claude"), input_fn=lambda p: "")
+        self.assertEqual(config.tools, ["claude"])
+
+    def test_tools_flag_rejects_unknown(self):
+        with self.assertRaises(ValueError):
+            install.collect_config(self.make_args(tools="gemini"), input_fn=lambda p: "")
+
+
+class TestNoClaudeHooks(InstallTestCase):
+    def test_skips_claude_settings_but_keeps_codex(self):
+        # Claude 插件市场安装的路径：hooks 由插件注册，install.py 只补 codex 与定时任务
+        self.write_foreign_hooks()
+        install.install(self.make_config(), self.home, load_launchd=False,
+                        register_claude=False, out=lambda *a: None)
+        self.assertFalse(any("claude_stop.py" in c for c in self.commands(self.claude_settings(), "Stop")))
+        self.assertTrue(any("codex_stop.py" in c for c in self.commands(self.codex_hooks(), "Stop")))
+
+
+class TestEphemeralRuntime(InstallTestCase):
+    def test_detects_npx_and_plugin_caches(self):
+        self.assertTrue(install.is_ephemeral(Path("/Users/x/.npm/_npx/abc123/node_modules/ai-worklog")))
+        self.assertTrue(install.is_ephemeral(Path("/Users/x/.claude/plugins/cache/m/ai-worklog/1.0.0")))
+        self.assertFalse(install.is_ephemeral(Path("/Users/x/worklog")))
+
+    def test_materialize_copies_runtime_and_writes_version(self):
+        runtime = self.home / ".ai-worklog"
+        install.materialize(runtime, out=lambda *a: None)
+        self.assertTrue((runtime / "install.py").exists())
+        self.assertTrue((runtime / "worklog.py").exists())
+        self.assertIn("from", (runtime / ".version").read_text(encoding="utf-8"))
+
+    def test_main_from_npx_materializes_and_registers_stable_paths(self):
+        fake_pkg = self.home / ".npm" / "_npx" / "abc" / "node_modules" / "ai-worklog"
+        fake_pkg.mkdir(parents=True)
+        (fake_pkg / "dummy.py").write_text("# dummy", encoding="utf-8")
+        runtime = self.home / ".ai-worklog"
+        original = install.SCRIPT_DIR
+        install.SCRIPT_DIR = fake_pkg
+        try:
+            code = install.main(
+                ["--yes", "--skip-launchd", "--runtime-dir", str(runtime)],
+                home=self.home, input_fn=lambda p: "",
+            )
+        finally:
+            install.SCRIPT_DIR = original
+        self.assertEqual(code, 0)
+        self.assertTrue((runtime / "dummy.py").exists())
+        ours = [c for c in self.commands(self.claude_settings(), "Stop") if "claude_stop.py" in c]
+        self.assertEqual(len(ours), 1)
+        self.assertIn(str(runtime), ours[0])
+        self.assertNotIn("_npx", ours[0])
 
 
 if __name__ == "__main__":

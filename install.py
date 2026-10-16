@@ -20,6 +20,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # UserPromptSubmit 始终注册：它负责打时长标记和缓存输入，是另外两档事件的公共地基。
@@ -44,6 +45,25 @@ LEGACY_LABELS = ("com.pigeonyang.worklog.daily", "com.pigeonyang.worklog.weekly"
 PLIST_PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+# 命中这些目录说明 install.py 运行在按版本地址化的临时缓存里（npx、插件市场），
+# hooks 和 launchd 指向它会随更新失效——需要先把运行脚本物化到稳定目录。
+EPHEMERAL_MARKERS = ("/.npm/_npx/", "/.claude/plugins/", "/.codex/plugins/", "/.agents/plugins/")
+
+
+def is_ephemeral(path: Path) -> bool:
+    text = str(path)
+    return any(marker in text for marker in EPHEMERAL_MARKERS)
+
+
+def materialize(runtime_dir: Path, out=print) -> None:
+    """把运行脚本复制到稳定目录并写 .version 供排障。重复运行是覆盖式更新。"""
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    for script in SCRIPT_DIR.glob("*.py"):
+        shutil.copy2(str(script), str(runtime_dir / script.name))
+    stamp = "installed {:%Y-%m-%d %H:%M:%S} from {}\n".format(datetime.now(), SCRIPT_DIR)
+    (runtime_dir / ".version").write_text(stamp, encoding="utf-8")
+    out("运行脚本已物化到 {}".format(runtime_dir))
 
 
 class Config:
@@ -222,7 +242,12 @@ def collect_config(args, input_fn=input) -> Config:
     for tool in ("claude", "codex", "opencode"):
         if shutil.which(tool):
             detected.append(tool)
-    if args.yes:
+    if args.tools is not None:
+        tools = [t.strip() for t in args.tools.split(",") if t.strip()]
+        invalid = [t for t in tools if t not in ("claude", "codex", "opencode")]
+        if invalid:
+            raise ValueError("未知工具：{}".format(",".join(invalid)))
+    elif args.yes:
         tools = list(detected)
     else:
         print("探测到的工具：{}".format("、".join(detected) or "（无）"))
@@ -264,15 +289,17 @@ def collect_config(args, input_fn=input) -> Config:
 
 # ---------- 安装 / 卸载 ----------
 
-def install(config: Config, home: Path, load_launchd: bool = True, out=print) -> None:
-    if "claude" in config.tools:
+def install(config: Config, home: Path, runtime_dir: Path = None,
+            load_launchd: bool = True, register_claude: bool = True, out=print) -> None:
+    script_dir = runtime_dir or SCRIPT_DIR
+    if "claude" in config.tools and register_claude:
         spec = dict(CLAUDE_BASE_HOOKS)
         spec.update(CLAUDE_LEVEL_HOOKS[config.claude_level])
-        merge_hooks(home / ".claude" / "settings.json", spec, SCRIPT_DIR, async_hooks=True)
+        merge_hooks(home / ".claude" / "settings.json", spec, script_dir, async_hooks=True)
         events = " / ".join(spec)
         out("已注册 Claude Code hooks（{}，粒度 {}）".format(events, config.claude_level))
     if "codex" in config.tools:
-        merge_hooks(home / ".codex" / "hooks.json", CODEX_HOOKS, SCRIPT_DIR, async_hooks=False)
+        merge_hooks(home / ".codex" / "hooks.json", CODEX_HOOKS, script_dir, async_hooks=False)
         out("已注册 codex hooks（UserPromptSubmit / Stop）")
     if "opencode" in config.tools:
         if shutil.which("opencode") or (home / ".opencode" / "bin" / "opencode").exists():
@@ -281,11 +308,11 @@ def install(config: Config, home: Path, load_launchd: bool = True, out=print) ->
             out("警告：未找到 opencode 可执行文件，会话采集会失败")
     if sys.platform == "darwin":
         if load_launchd:
-            install_launchd(config, SCRIPT_DIR, home, out)
+            install_launchd(config, script_dir, home, out)
         else:
             out("（跳过 launchd 加载）")
     else:
-        print_cron_hint(config, SCRIPT_DIR, out)
+        print_cron_hint(config, script_dir, out)
 
 
 def uninstall(home: Path, out=print) -> None:
@@ -307,6 +334,11 @@ def main(argv=None, home: Path = None, input_fn=input) -> int:
     parser.add_argument("--claude-level", choices=list(CLAUDE_LEVEL_HOOKS),
                         help="claude 记录粒度：detailed=每turn+每清单项，balanced=每turn，minimal=仅清单项")
     parser.add_argument("--no-tapd", action="store_true", help="关闭 TAPD 需求关联")
+    parser.add_argument("--tools", help="只注册指定工具，逗号分隔（claude,codex,opencode）；默认探测到的全部")
+    parser.add_argument("--runtime-dir", help="物化运行脚本的稳定目录，默认 ~/.ai-worklog（仅 npx/插件等临时目录运行时生效）")
+    parser.add_argument("--no-claude-hooks", action="store_true",
+                        help="跳过 Claude settings.json 合并（Claude 插件市场安装时用：hooks 已由插件注册）")
+    parser.add_argument("--skip-launchd", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--uninstall", action="store_true", help="移除注册与定时任务")
     parser.add_argument("action", nargs="?", choices=["uninstall"], help="同 --uninstall")
     args = parser.parse_args(argv)
@@ -320,11 +352,26 @@ def main(argv=None, home: Path = None, input_fn=input) -> int:
     except (ValueError, EOFError) as exc:
         print("配置无效：{}".format(exc), file=sys.stderr)
         return 1
-    install(config, home)
+
+    runtime_dir = SCRIPT_DIR
+    if is_ephemeral(SCRIPT_DIR):
+        default_runtime = home / ".ai-worklog"
+        if args.runtime_dir:
+            runtime_dir = Path(args.runtime_dir).expanduser()
+        elif args.yes:
+            runtime_dir = default_runtime
+        else:
+            runtime_dir = Path(_ask(input_fn, "运行脚本安装目录", str(default_runtime))).expanduser()
+        materialize(runtime_dir)
+    install(config, home, runtime_dir=runtime_dir,
+            load_launchd=not args.skip_launchd,
+            register_claude=not args.no_claude_hooks)
     print()
     print("完成。数据目录：{}".format(config.data_dir))
+    if runtime_dir != SCRIPT_DIR:
+        print("运行目录：{}（hooks 与定时任务都指向这里）".format(runtime_dir))
     print("启用 TAPD 关联：把 tapd_my_tasks.md 放到 {}/tapd_task/ 即可（缺失时自动关闭该功能）".format(config.data_dir))
-    print("更新方式：git pull && ./install.py")
+    print("更新方式：重跑安装命令（npx/git pull 后 ./install.py），脚本幂等")
     return 0
 
 

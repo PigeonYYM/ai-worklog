@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "/usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/claude_prompt.py\" 2>/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "/usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/claude_stop.py\" 2>/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "/usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/claude_task.py\" 2>/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}

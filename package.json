@@ -1,0 +1,18 @@
+{
+  "name": "ai-worklog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-tool worklog for AI coding assistants — Claude Code, Codex & OpenCode sessions compiled into daily/weekly reports",
+  "bin": {
+    "ai-worklog": "bin/ai-worklog.js"
+  },
+  "files": [
+    "bin/",
+    "*.py",
+    "README.md",
+    "README.zh-CN.md"
+  ],
+  "engines": {
+    "node": ">=14"
+  }
+}

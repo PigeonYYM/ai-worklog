@@ -1,0 +1,20 @@
+{
+  "name": "ai-worklog",
+  "owner": {
+    "name": "PigeonYYM",
+    "url": "https://github.com/PigeonYYM"
+  },
+  "metadata": {
+    "description": "Cross-tool worklog for AI coding assistants — sessions compiled into daily/weekly reports",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ai-worklog",
+      "source": "./",
+      "description": "记录 Claude Code 的 turn 与任务完成到统一工作流水，定时整合日报/周报，可关联 TAPD 需求",
+      "category": "productivity",
+      "tags": ["worklog", "daily-report", "weekly-report", "hours", "tapd"]
+    }
+  ]
+}

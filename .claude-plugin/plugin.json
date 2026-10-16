@@ -1,0 +1,16 @@
+{
+  "name": "ai-worklog",
+  "version": "1.0.0",
+  "description": "Cross-tool worklog for AI coding assistants — Claude Code, Codex & OpenCode sessions compiled into daily/weekly reports with TAPD linking",
+  "author": {
+    "name": "PigeonYYM",
+    "url": "https://github.com/PigeonYYM"
+  },
+  "homepage": "https://github.com/PigeonYYM/ai-worklog",
+  "repository": "https://github.com/PigeonYYM/ai-worklog",
+  "license": "MIT",
+  "keywords": ["worklog", "daily-report", "weekly-report", "claude-code", "codex", "opencode"],
+  "commands": [
+    "./commands/setup.md"
+  ]
+}

@@ -6,40 +6,53 @@ Cross-tool worklog for AI coding assistants: Claude Code, Codex and OpenCode ses
 
 ## Installation
 
+Three options — all walk you through the same interactive configuration (tool selection, Claude granularity, data directory, model, report times, TAPD toggle):
+
+### Option A: npx one-liner (recommended, no clone)
+
+```bash
+npx -y git+ssh://git@github.com/PigeonYYM/ai-worklog.git
+```
+
+Prerequisites: node/npm on your machine (guaranteed if you use Claude Code) and access to this private repo (uses your existing GitHub SSH key). Runtime scripts are materialized to `~/.ai-worklog/`; hooks and scheduled jobs point at that stable directory. Non-interactive: add `--yes` plus `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd/--tools` flags.
+
+### Option B: Claude Code plugin marketplace (hooks auto-update with the plugin)
+
+Inside Claude Code:
+
+```
+/plugin marketplace add PigeonYYM/ai-worklog
+/plugin install ai-worklog@ai-worklog
+```
+
+Then run `/ai-worklog:setup` to finish scheduled jobs and remaining config.
+Constraints: data directory is fixed to `~/daily-report` and granularity is fixed to `detailed` (plugin hooks run from a versioned cache directory and can't see custom environment); use option A or C if you need to customize.
+
+### Option C: git clone (developers/maintainers)
+
 ```bash
 git clone git@github.com:PigeonYYM/ai-worklog.git
 cd ai-worklog
 ./install.py
 ```
 
-The installer is interactive; every step has a default (press Enter to accept):
+Registers in place — code edits take effect immediately.
 
-1. **Which tools to register hooks for** (auto-detected on your machine)
-2. **Claude Code recording granularity** (three levels, directly controls record volume):
-   - `detailed` — record every turn *and* every completed task-list item (densest)
-   - `balanced` — one record per turn
-   - `minimal` — only completed task-list items (sparsest; big tasks without a task list won't be recorded)
-3. **Data directory** (default `~/daily-report`)
-4. **Summarization model** (default empty = use opencode's configured default model; can also be set later via `WORKLOG_MODEL`)
-5. **Daily/weekly report times** (default daily 21:07, Friday 21:20)
-6. **Enable TAPD requirement linking** (y/n)
-
-Non-interactive install: `./install.py --yes` for all defaults, or use `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd` flags (see `./install.py --help`).
-
-Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines for manual setup), the `opencode` CLI (used for both summarization and session collection), Python 3.9+ (system Python is fine).
+Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines), the `opencode` CLI (used for summarization and collection), Python 3.9+ (system Python is fine).
 
 ## Updating
 
-```bash
-git pull && ./install.py
-```
+- Option A: rerun the same npx command (materialization overwrites `~/.ai-worklog/`; hook targets are unchanged)
+- Option B: update the plugin via `/plugin`, then rerun `/ai-worklog:setup`
+- Option C: `git pull && ./install.py`
 
-The installer is idempotent: stale hook entries are replaced with the new paths, scheduled jobs are reloaded, and every config step can be skipped with Enter to keep the default.
+The installer is idempotent: stale hook entries are replaced, scheduled jobs reloaded, and every prompt keeps its default on Enter.
 
 ## Uninstalling
 
 ```bash
-./install.py uninstall
+/usr/bin/python3 ~/.ai-worklog/install.py uninstall   # options A/B (also remove the plugin via /plugin)
+./install.py uninstall                                # option C
 ```
 
 Removes hook registrations and scheduled jobs. **Your data directory is left untouched** (stream, daily and weekly reports all remain).
