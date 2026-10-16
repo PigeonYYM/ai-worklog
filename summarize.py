@@ -18,11 +18,24 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import collect_opencode
+import tapd
 import worklog
 
-MODEL = "kimi-for-coding/k3"
+# 整合模型由 WORKLOG_MODEL 环境变量指定；未设置时不传 -m，用 opencode 配置的默认模型。
+MODEL = os.environ.get("WORKLOG_MODEL") or None
 MODEL_TIMEOUT = 300
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+TAPD_INSTRUCTIONS = """
+TAPD 需求关联（候选清单在下方，列为 ID 和标题）：
+- 正文里每条成果条目，仅当与某条需求存在强关联（渠道、功能、游戏名等关键词明确对应）时，在条目末尾追加 `（关联：<ID>）`，ID 必须逐字来自候选清单
+- 拿不准关联哪条（零条或多条都可能）时，不要追加标注，而是在整个文档末尾输出独立一行：`<!-- TAPD_PENDING: <该条目原文> | <候选ID1>,<候选ID2> -->`
+- 既无强关联也无可疑候选的条目，什么都不加
+- 关联只标在成果条目后，不要写进工时表，不要单独成节
+"""
+
+TAPD_CONFIRMED_HEADER = "以下条目的关联已由用户确认，若对应事项出现在本次正文里，请逐字保留 `（关联：<ID>）` 标注："
+TAPD_REJECTED_HEADER = "以下条目已由用户确认不关联任何需求，不要标注，也不要列入 TAPD_PENDING："
 
 DAILY_PROMPT = """把下面这份工作流水整合成当天日报。
 
@@ -165,7 +178,7 @@ def build_daily_prompt(rows, day: datetime) -> str:
         day="{:%Y-%m-%d}".format(day),
         weekday=worklog.WEEKDAYS[day.weekday()],
         flow=flow,
-    )
+    ) + tapd_block()
 
 
 def build_weekly_prompt(dated_rows, start: datetime, end: datetime) -> str:
@@ -177,7 +190,118 @@ def build_weekly_prompt(dated_rows, start: datetime, end: datetime) -> str:
         start="{:%Y-%m-%d}".format(start),
         end="{:%Y-%m-%d}".format(end),
         flow=flow,
-    )
+    ) + tapd_block()
+
+
+def tapd_enabled() -> bool:
+    """install.py 可选择关闭关联功能（往定时任务环境写 WORKLOG_TAPD=off）。"""
+    return os.environ.get("WORKLOG_TAPD") != "off"
+
+
+def tapd_block() -> str:
+    """拼进 prompt 的 TAPD 段：候选清单 + 关联规则 + 用户已确认/已否决的结论。
+
+    清单文件缺失或功能被关闭时返回空串，整个关联功能静默关闭。
+    """
+    if not tapd_enabled():
+        return ""
+    tasks = tapd.load_candidates()
+    if not tasks:
+        return ""
+    lines = ["", "TAPD 需求候选清单："]
+    lines.extend("{}\t{}".format(task["id"], task["title"]) for task in tasks)
+    lines.append(TAPD_INSTRUCTIONS)
+    links = tapd.read_links()
+    confirmed = [(item, tapd_id) for item, tapd_id in links.items() if tapd_id]
+    rejected = [item for item, tapd_id in links.items() if not tapd_id]
+    if confirmed:
+        lines.append(TAPD_CONFIRMED_HEADER)
+        lines.extend("- {} → {}".format(item, tapd_id) for item, tapd_id in confirmed)
+        lines.append("")
+    if rejected:
+        lines.append(TAPD_REJECTED_HEADER)
+        lines.extend("- {}".format(item) for item in rejected)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def apply_tapd(body: str, scope: str) -> str:
+    """模型输出的 TAPD 后处理：收待确认、校验展开标注、追加待确认脚注。
+
+    只在模型路径调用；退化渲染不做关联也不动队列——降级模式保持纯脚本。
+    """
+    if not tapd_enabled():
+        return body
+    tasks = tapd.load_candidates()
+    if not tasks:
+        return body
+    body, found = tapd.extract_pending(body)
+    # 已有结论（确认关联或确认无关联）的条目不进队列——模型不保证每次都记得
+    # 注入的指令，这一道是确定性的兜底，保证 `--link` 的结论是终局。
+    decided = set(tapd.read_links())
+    found = [entry for entry in found if entry.get("item") not in decided]
+    if found:
+        tapd.add_pending(scope, found)
+    body = tapd.expand_annotations(body, tasks)
+    pending_count = len(tapd.read_pending().get(scope, []))
+    if pending_count:
+        link_cmd = "/usr/bin/python3 {} --link".format(Path(__file__).resolve())
+        body = body.rstrip() + (
+            "\n\n> {} 条需求关联待确认，运行 `{}` 确认\n".format(pending_count, link_cmd)
+        )
+    return body
+
+
+def link_mode() -> int:
+    """交互确认待关联队列：选编号关联 / 0 无关联 / 回车跳过，然后重建受影响的报告。"""
+    pending = tapd.read_pending()
+    if not pending:
+        print("没有待确认的需求关联")
+        return 0
+    tasks = {task["id"]: task for task in tapd.load_candidates()}
+    links = tapd.read_links()
+    affected = []
+    for scope in sorted(pending):
+        remaining = []
+        for entry in pending[scope]:
+            item = entry.get("item", "")
+            candidates = [c for c in entry.get("candidates", []) if c in tasks]
+            print("\n[{}] {}".format(scope, item))
+            for index, cid in enumerate(candidates, 1):
+                print("  {}. {} {}".format(index, cid, tasks[cid]["title"]))
+            choice = input("选择编号关联，0 = 无关联，回车 = 跳过: ").strip()
+            if not choice:
+                remaining.append(entry)
+            elif choice == "0":
+                links[item] = ""
+            elif choice.isdigit() and 1 <= int(choice) <= len(candidates):
+                links[item] = candidates[int(choice) - 1]
+            else:
+                print("无效输入，跳过")
+                remaining.append(entry)
+        affected.append(scope)
+        if remaining:
+            pending[scope] = remaining
+        else:
+            pending.pop(scope)
+    tapd.write_links(links)
+    tapd.write_pending(pending)
+    for scope in affected:
+        rebuild_scope(scope)
+    return 0
+
+
+def rebuild_scope(scope: str) -> None:
+    """按 scope 重建对应报告，让刚确认的关联立刻体现在 md 里。"""
+    try:
+        kind, _, name = scope.partition(" ")
+        if kind == "daily":
+            daily(datetime.strptime(name, "%Y-%m-%d"))
+        elif kind == "weekly":
+            monday = datetime.strptime(name + "-1", "%G-W%V-%u")
+            weekly(monday)
+    except ValueError:
+        print("无法识别的 scope：{}，跳过重建".format(scope), file=sys.stderr)
 
 
 def run_model(prompt: str) -> Optional[str]:
@@ -197,9 +321,13 @@ def run_model(prompt: str) -> Optional[str]:
     tmp_path = Path(tmp_name)
     try:
         with tmp_path.open("wb") as out_handle:
+            command = [binary, "run", "--pure"]
+            if MODEL:
+                command += ["-m", MODEL]
+            command.append(prompt)
             try:
                 result = subprocess.run(
-                    [binary, "run", "--pure", "-m", MODEL, prompt],
+                    command,
                     cwd=str(workdir),
                     stdout=out_handle,
                     stderr=subprocess.PIPE,
@@ -266,6 +394,7 @@ def daily(day: datetime) -> int:
             return 0
         body = run_model(build_daily_prompt(rows, day))
         if body and validate(body, rows):
+            body = apply_tapd(body, "daily {:%Y-%m-%d}".format(day))
             content = body.rstrip() + "\n"
             source = "模型"
         else:
@@ -301,6 +430,7 @@ def weekly(day: datetime) -> int:
         rows = [row for _, row in dated_rows]
         body = run_model(build_weekly_prompt(dated_rows, start, end))
         if body and validate(body, rows):
+            body = apply_tapd(body, "weekly {:%G-W%V}".format(start))
             content = body.rstrip() + "\n"
             source = "模型"
         else:
@@ -338,8 +468,11 @@ def main() -> int:
     parser.add_argument("--date", help="指定日期 YYYY-MM-DD，默认今天")
     parser.add_argument("--hours", action="store_true", help="输出工时汇总，不生成 md")
     parser.add_argument("--since", help="工时汇总起始日期 YYYY-MM-DD，默认与 --date 同天")
+    parser.add_argument("--link", action="store_true", help="交互确认待关联的 TAPD 需求，并重建受影响的报告")
     args = parser.parse_args()
 
+    if args.link:
+        return link_mode()
     day = datetime.strptime(args.date, "%Y-%m-%d") if args.date else datetime.now()
     if args.hours:
         start = datetime.strptime(args.since, "%Y-%m-%d") if args.since else day

@@ -421,5 +421,141 @@ class TestHoursReport(SummarizeTestCase):
         self.assertIn("无记录", buffer.getvalue())
 
 
+TAPD_MD = """# TAPD 我的任务同步
+
+## 进行中（1）
+
+| 类型 | ID | 标题 |
+|---|---|---|
+| 需求 | [111](https://www.tapd.cn/x/stories/view/111) | 【广告系统】AI 智能投放 |
+"""
+
+
+class TapdSummarizeTestCase(SummarizeTestCase):
+    def write_tasks(self, content=TAPD_MD):
+        import tapd
+        tapd.tasks_path().parent.mkdir(parents=True, exist_ok=True)
+        tapd.tasks_path().write_text(content, encoding="utf-8")
+
+
+class TestTapdBlock(TapdSummarizeTestCase):
+    def test_no_tasks_file_leaves_prompt_untouched(self):
+        import summarize
+        prompt = summarize.build_daily_prompt(ROWS, datetime(2026, 9, 11))
+        self.assertNotIn("TAPD", prompt)
+
+    def test_candidates_and_rules_in_prompt(self):
+        import summarize
+        self.write_tasks()
+        prompt = summarize.build_daily_prompt(ROWS, datetime(2026, 9, 11))
+        self.assertIn("111\t【广告系统】AI 智能投放", prompt)
+        self.assertIn("（关联：<ID>）", prompt)
+        self.assertIn("TAPD_PENDING", prompt)
+
+    def test_confirmed_and_rejected_links_injected(self):
+        import summarize
+        import tapd
+        self.write_tasks()
+        tapd.write_links({"投放策略联调": "111", "杂事": ""})
+        prompt = summarize.build_daily_prompt(ROWS, datetime(2026, 9, 11))
+        self.assertIn("投放策略联调 → 111", prompt)
+        self.assertIn("杂事", prompt)
+        self.assertIn(summarize.TAPD_REJECTED_HEADER, prompt)
+
+
+class TestApplyTapd(TapdSummarizeTestCase):
+    def test_annotation_expanded_pending_queued_footer_added(self):
+        import summarize
+        import tapd
+        self.write_tasks()
+        body = (
+            "# 2026-10-15 周四\n\n"
+            "## repo-a\n"
+            "- 投放策略联调（关联：111）\n"
+            "- 神秘事项\n\n"
+            "<!-- TAPD_PENDING: 神秘事项 | 111 -->\n"
+        )
+        result = summarize.apply_tapd(body, "daily 2026-10-15")
+        self.assertIn("（关联需求：【广告系统】AI 智能投放 [111]）", result)
+        self.assertNotIn("TAPD_PENDING", result)
+        self.assertIn("1 条需求关联待确认", result)
+        pending = tapd.read_pending()
+        self.assertEqual(pending["daily 2026-10-15"][0]["item"], "神秘事项")
+
+    def test_no_pending_no_footer(self):
+        import summarize
+        self.write_tasks()
+        result = summarize.apply_tapd("## repo-a\n- 做了某事", "daily 2026-10-15")
+        self.assertNotIn("待确认", result)
+
+    def test_decided_items_never_reenter_pending(self):
+        # 模型不保证记得注入的确认结论；apply_tapd 必须确定性拦下已有结论的条目，
+        # 否则 --link 确认完一次，下次重建又把它挂回待确认。
+        import summarize
+        import tapd
+        self.write_tasks()
+        tapd.write_links({"神秘事项": "111", "否决项": ""})
+        body = "## repo-a\n- 神秘事项\n- 否决项\n<!-- TAPD_PENDING: 神秘事项 | 111 -->\n<!-- TAPD_PENDING: 否决项 | 111 -->"
+        summarize.apply_tapd(body, "daily 2026-10-15")
+        self.assertEqual(tapd.read_pending(), {})
+
+    def test_no_tasks_file_is_passthrough(self):
+        import summarize
+        body = "## repo-a\n- 做了某事（关联：111）\n<!-- TAPD_PENDING: x | 111 -->"
+        self.assertEqual(summarize.apply_tapd(body, "daily 2026-10-15"), body)
+
+
+class TestLinkMode(TapdSummarizeTestCase):
+    def test_confirm_choice_writes_link_clears_pending_rebuilds(self):
+        import builtins
+        import summarize
+        import tapd
+        import worklog
+
+        self.write_tasks()
+        worklog.append_record(datetime(2026, 10, 15, 10, 0), "repo-a", "做了某事", "claude")
+        tapd.add_pending("daily 2026-10-15", [{"item": "做了某事", "candidates": ["111"]}])
+        os.environ["WORKLOG_OPENCODE"] = "/nonexistent/opencode"
+        os.environ["WORKLOG_SKIP_COLLECT"] = "1"
+        original_input = builtins.input
+        builtins.input = lambda prompt="": "1"
+        try:
+            code = summarize.link_mode()
+        finally:
+            builtins.input = original_input
+            os.environ.pop("WORKLOG_OPENCODE", None)
+            os.environ.pop("WORKLOG_SKIP_COLLECT", None)
+        self.assertEqual(code, 0)
+        self.assertEqual(tapd.read_links(), {"做了某事": "111"})
+        self.assertEqual(tapd.read_pending(), {})
+        # 受影响 scope 已自动重建（模型不可用时退化为分组渲染，文件存在即可）
+        self.assertTrue((worklog.report_dir() / "2026-10-15.md").exists())
+
+    def test_zero_marks_rejection(self):
+        import builtins
+        import summarize
+        import tapd
+        import worklog
+
+        self.write_tasks()
+        worklog.append_record(datetime(2026, 10, 15, 10, 0), "repo-a", "杂事", "claude")
+        tapd.add_pending("daily 2026-10-15", [{"item": "杂事", "candidates": ["111"]}])
+        os.environ["WORKLOG_SKIP_COLLECT"] = "1"
+        original_input = builtins.input
+        builtins.input = lambda prompt="": "0"
+        try:
+            summarize.link_mode()
+        finally:
+            builtins.input = original_input
+            os.environ.pop("WORKLOG_SKIP_COLLECT", None)
+        self.assertEqual(tapd.read_links(), {"杂事": ""})
+        self.assertEqual(tapd.read_pending(), {})
+
+    def test_empty_pending_is_noop(self):
+        import summarize
+        self.assertEqual(summarize.link_mode(), 0)
+
+
+
 if __name__ == "__main__":
     unittest.main()

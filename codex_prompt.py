@@ -28,14 +28,14 @@ def safe_session_id(raw) -> str:
     return worklog.safe_token(raw)
 
 
-def cache_path(session_id) -> Path:
-    return cache_dir() / "{}{}.txt".format(PREFIX, safe_session_id(session_id))
+def cache_path(session_id, prefix: str = PREFIX) -> Path:
+    return cache_dir() / "{}{}.txt".format(prefix, safe_session_id(session_id))
 
 
-def cleanup_stale(max_age_seconds: int) -> int:
+def cleanup_stale(max_age_seconds: int, prefix: str = PREFIX) -> int:
     removed = 0
     now = time.time()
-    for path in cache_dir().glob("{}*.txt".format(PREFIX)):
+    for path in cache_dir().glob("{}*.txt".format(prefix)):
         try:
             if now - path.stat().st_mtime > max_age_seconds:
                 path.unlink()

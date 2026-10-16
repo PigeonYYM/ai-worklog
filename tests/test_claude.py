@@ -136,3 +136,111 @@ class TestClaudeTask(ClaudeHookTestCase):
         # 2026-09-11 踩过：hook 脚本裸调用 main() 会在被 import 时抢读 stdin。
         source = (REPO / "claude_task.py").read_text(encoding="utf-8")
         self.assertIn('if __name__ == "__main__":', source)
+
+
+class TestClaudePromptCaching(ClaudeHookTestCase):
+    def setUp(self):
+        super().setUp()
+        self.cache = tempfile.TemporaryDirectory()
+        os.environ["WORKLOG_CACHE"] = self.cache.name
+
+    def tearDown(self):
+        os.environ.pop("WORKLOG_CACHE", None)
+        self.cache.cleanup()
+        super().tearDown()
+
+    def test_caches_prompt_for_stop_hook(self):
+        import claude_prompt
+        result = self.run_hook(
+            "claude_prompt.py",
+            {"session_id": "abc", "cwd": "/a/repo", "prompt": "帮我写日报"},
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(
+            claude_prompt.cache_path("abc").read_text(encoding="utf-8"), "帮我写日报"
+        )
+
+    def test_empty_prompt_writes_no_cache(self):
+        import claude_prompt
+        self.run_hook("claude_prompt.py", {"session_id": "abc", "prompt": "   "})
+        self.assertFalse(claude_prompt.cache_path("abc").exists())
+
+
+class TestClaudeStop(ClaudeHookTestCase):
+    def setUp(self):
+        super().setUp()
+        self.cache = tempfile.TemporaryDirectory()
+        os.environ["WORKLOG_CACHE"] = self.cache.name
+
+    def tearDown(self):
+        os.environ.pop("WORKLOG_CACHE", None)
+        self.cache.cleanup()
+        super().tearDown()
+
+    def test_records_turn_with_cached_prompt_as_title(self):
+        import worklog
+        self.run_hook(
+            "claude_prompt.py",
+            {"session_id": "s1", "cwd": "/a/my-repo", "prompt": "修复归因数据拉取"},
+        )
+        result = self.run_hook("claude_stop.py", {"session_id": "s1", "cwd": "/a/my-repo"})
+        self.assertEqual(result.returncode, 0)
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][1], "my-repo")
+        self.assertEqual(rows[0][2], "修复归因数据拉取")
+        self.assertEqual(rows[0][3], "claude")
+        self.assertIsNotNone(rows[0][4])
+
+    def test_consumes_cache(self):
+        import claude_prompt
+        self.run_hook("claude_prompt.py", {"session_id": "s2", "prompt": "任务一"})
+        self.run_hook("claude_stop.py", {"session_id": "s2", "cwd": "/a/repo"})
+        self.assertFalse(claude_prompt.cache_path("s2").exists())
+
+    def test_without_cache_is_skipped(self):
+        import worklog
+        result = self.run_hook("claude_stop.py", {"session_id": "s3", "cwd": "/a/repo"})
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(worklog.read_day(datetime.now()), [])
+
+    def test_task_then_stop_split_duration_without_overlap(self):
+        # 与 TaskCompleted 共用同一条标记链：turn 中段的清单项完成拿走前半段，
+        # Stop 只拿剩余尾段，两者相加不重不漏（第二条应接近 0，而不是又一段完整时长）。
+        import time
+        import worklog
+        import claude_stop
+        import claude_prompt
+
+        started = datetime.now()
+        worklog.set_mark("claude", "s4", started)
+        claude_prompt.cache_path("s4").parent.mkdir(parents=True, exist_ok=True)
+        claude_prompt.cache_path("s4").write_text("大任务", encoding="utf-8")
+
+        self.run_hook(
+            "claude_task.py",
+            {"session_id": "s4", "cwd": "/a/repo", "task_subject": "子任务一"},
+        )
+        claude_stop.main_with_payload({"session_id": "s4", "cwd": "/a/repo"})
+
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 2)
+        total = sum(row[4] or 0 for row in rows)
+        self.assertLessEqual(total, int(time.time() - started.timestamp()) + 1)
+
+    def test_cache_read_failure_keeps_mark_untouched(self):
+        # 标题取不到就不该消耗时长标记，否则这个 turn 的时长会被静默抹掉。
+        import worklog
+        import claude_prompt
+        import claude_stop
+
+        worklog.set_mark("claude", "s5", datetime.now())
+        cache = claude_prompt.cache_path("s5")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.mkdir()  # 同名的目录让 read_text 必然 OSError
+
+        claude_stop.main_with_payload({"session_id": "s5", "cwd": "/a/repo"})
+
+        self.assertEqual(worklog.read_day(datetime.now()), [])
+        self.assertIsNotNone(worklog.read_mark("claude", "s5"))
+
