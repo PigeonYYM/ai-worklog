@@ -77,7 +77,7 @@ An empty duration means unknown (hook didn't fire, etc.) and is strictly distinc
 
 | Tool | Mechanism | Granularity |
 |---|---|---|
-| Claude Code | `UserPromptSubmit` sets mark + caches input (`claude_prompt.py`); `Stop` records turns (`claude_stop.py`) + `TaskCompleted` records task items (`claude_task.py`); granularity set by the install level | per turn / per task |
+| Claude Code | `UserPromptSubmit` sets mark + caches input (`claude_prompt.py`); `Stop` records turns (`claude_stop.py`) + `TaskCompleted` records task items (`claude_task.py`); granularity set by the install level; `SessionEnd` backfills a turn lost to Esc interruption (`claude_session_end.py`) | per turn / per task |
 | Codex | `UserPromptSubmit` + `Stop` pair in `~/.codex/hooks.json` (`codex_prompt.py` / `codex_stop.py`) | per turn |
 | OpenCode | polls its local SQLite at summarize time (`collect_opencode.py`), incremental via watermark | per session |
 
@@ -111,8 +111,16 @@ Confirmations (including "no association") persist in `.state/tapd_links.json` a
 /usr/bin/python3 collect_opencode.py               # pull opencode increments manually
 /usr/bin/python3 summarize.py --hours --since 2026-09-14  # print hours summary, for timesheets
 /usr/bin/python3 summarize.py --link               # resolve pending TAPD links
+/usr/bin/python3 summarize.py --log "manual deploy to prod" --minutes 25   # log work done outside agents
 ./install.py                                       # reinstall / reconfigure hooks and jobs
 ```
+
+**Backstops for interruptions and manual work**: a turn killed by Esc (Stop never
+fires) is backfilled by the SessionEnd hook, with the duration including your
+manual takeover time; work done entirely outside agents can be logged with
+`--log` (tool column `manual`, `--minutes` optional, project defaults to the
+current directory name). Inside a Claude session you can also just say "记一条
+工作日志：xxx" and let the agent run it for you.
 
 `summarize.py` runs `collect_opencode.py` before summarizing, so a manual `--daily`/`--weekly` always includes the latest opencode data.
 
@@ -132,4 +140,5 @@ All tests redirect via the `WORKLOG_HOME` environment variable and a temporary H
 - **Suspect stream data loss**: don't panic — `.raw/*.tsv` is append-only and the single source of truth. Any md can be deleted and regenerated to verify.
 - **Pending-link footer stuck in the daily report**: `.state/tapd_pending.json` has unresolved entries. Run `--link` once (or delete the scope from the file). If the model keeps re-flagging the same item, confirm "no association" once to veto it permanently.
 - **Self-reference regression** (rows from the data-directory project appear in reports): the exclusion logic in `collect_opencode.py` has broken — re-check its project-name filter.
+- **A turn interrupted by Esc wasn't recorded**: confirm the SessionEnd hook is registered (installs from older versions don't have it — rerun the install command). It only backfills the *last* unrecorded turn when the session ends; continuing to work in the same session after an interrupt is unaffected.
 - **Moved the repo**: after relocating, rerun `./install.py` — stale hook paths are replaced and scheduled jobs are pointed at the new location.

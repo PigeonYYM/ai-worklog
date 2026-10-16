@@ -32,6 +32,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "/usr/bin/python3 \"${CLAUDE_PLUGIN_ROOT}/claude_session_end.py\" 2>/dev/null || true",
+            "type": "command"
+          }
+        ]
+      }
     ]
   }
 }

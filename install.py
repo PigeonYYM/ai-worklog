@@ -24,7 +24,11 @@ from datetime import datetime
 from pathlib import Path
 
 # UserPromptSubmit 始终注册：它负责打时长标记和缓存输入，是另外两档事件的公共地基。
-CLAUDE_BASE_HOOKS = {"UserPromptSubmit": "claude_prompt.py"}
+# SessionEnd 始终注册：兜底被 Esc 中断、没被 Stop 消费的最后一个 turn，与粒度档位正交。
+CLAUDE_BASE_HOOKS = {
+    "UserPromptSubmit": "claude_prompt.py",
+    "SessionEnd": "claude_session_end.py",
+}
 # 三档记录粒度，与流水产出量强相关：
 #   detailed —— 每个 turn 结束记一条 + 每个任务清单项完成记一条（最密）
 #   balanced —— 只在每个 turn 结束记一条（适中）

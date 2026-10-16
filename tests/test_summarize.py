@@ -505,6 +505,33 @@ class TestApplyTapd(TapdSummarizeTestCase):
         self.assertEqual(summarize.apply_tapd(body, "daily 2026-10-15"), body)
 
 
+class TestLogRecord(SummarizeTestCase):
+    def test_writes_manual_record_with_duration(self):
+        import summarize
+        import worklog
+        code = summarize.log_record("手动部署到生产", 30, "ad-platform")
+        self.assertEqual(code, 0)
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][1], "ad-platform")
+        self.assertEqual(rows[0][2], "手动部署到生产")
+        self.assertEqual(rows[0][3], "manual")
+        self.assertEqual(rows[0][4], 1800)
+
+    def test_minutes_omitted_yields_unknown_duration(self):
+        import summarize
+        import worklog
+        summarize.log_record("手动填了 TAPD 工时", None, None)
+        rows = worklog.read_day(datetime.now())
+        self.assertIsNone(rows[0][4])
+
+    def test_empty_title_rejected(self):
+        import summarize
+        import worklog
+        self.assertEqual(summarize.log_record("   ", 5, None), 1)
+        self.assertEqual(worklog.read_day(datetime.now()), [])
+
+
 class TestLinkMode(TapdSummarizeTestCase):
     def test_confirm_choice_writes_link_clears_pending_rebuilds(self):
         import builtins

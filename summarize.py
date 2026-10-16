@@ -461,6 +461,20 @@ def hours_report(start: datetime, end: datetime) -> int:
     return 0
 
 
+def log_record(title: str, minutes, project) -> int:
+    """手动补录一条流水：agent 之外的手工工作（手动部署、手动填报等）。"""
+    title = worklog.clean(title)
+    if not title:
+        print("标题为空，未写入", file=sys.stderr)
+        return 1
+    duration = minutes * 60 if minutes is not None else None
+    project = worklog.clean(project) if project else worklog.project_name(os.getcwd())
+    now = datetime.now()
+    worklog.append_record(now, project, title, "manual", duration)
+    print("已补录到 {}：{}（{}）".format(worklog.raw_path(now), title, project))
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="整合工作流水为日报或周报")
     parser.add_argument("--daily", action="store_true", help="生成当天日报")
@@ -469,8 +483,13 @@ def main() -> int:
     parser.add_argument("--hours", action="store_true", help="输出工时汇总，不生成 md")
     parser.add_argument("--since", help="工时汇总起始日期 YYYY-MM-DD，默认与 --date 同天")
     parser.add_argument("--link", action="store_true", help="交互确认待关联的 TAPD 需求，并重建受影响的报告")
+    parser.add_argument("--log", help="手动补录一条流水（agent 之外的手工工作），值为标题")
+    parser.add_argument("--minutes", type=int, help="补录条目的时长（分钟），默认未知")
+    parser.add_argument("--project", help="补录条目的项目名，默认当前目录名")
     args = parser.parse_args()
 
+    if args.log is not None:
+        return log_record(args.log, args.minutes, args.project)
     if args.link:
         return link_mode()
     day = datetime.strptime(args.date, "%Y-%m-%d") if args.date else datetime.now()

@@ -77,7 +77,7 @@ cd ai-worklog
 
 | 工具 | 机制 | 粒度 |
 |---|---|---|
-| Claude Code | `UserPromptSubmit` 打标记+缓存输入（`claude_prompt.py`）；`Stop` 记 turn（`claude_stop.py`）+ `TaskCompleted` 记清单项（`claude_task.py`），粒度由安装档位决定 | 单个 turn / 单个任务 |
+| Claude Code | `UserPromptSubmit` 打标记+缓存输入（`claude_prompt.py`）；`Stop` 记 turn（`claude_stop.py`）+ `TaskCompleted` 记清单项（`claude_task.py`），粒度由安装档位决定；`SessionEnd` 兜底被 Esc 中断的最后一个 turn（`claude_session_end.py`） | 单个 turn / 单个任务 |
 | codex | `~/.codex/hooks.json` 的 `UserPromptSubmit` + `Stop` 配对（`codex_prompt.py` / `codex_stop.py`） | 单个 turn |
 | opencode | 整合时轮询其本地 SQLite（`collect_opencode.py`），按水位线增量拉取 | 整个会话 |
 
@@ -113,8 +113,15 @@ opencode 的采集内建**自指防护**：整合任务本身也是在数据目�
 /usr/bin/python3 collect_opencode.py               # 手动拉一次 opencode 增量
 /usr/bin/python3 summarize.py --hours --since 2026-09-14  # 输出工时汇总，用于填报
 /usr/bin/python3 summarize.py --link               # 确认待关联的 TAPD 需求
+/usr/bin/python3 summarize.py --log "手动部署到生产" --minutes 25   # 补录 agent 之外的手工工作
 ./install.py                                       # 重装/重配 hooks 与定时任务
 ```
+
+**中断与手动工作的兜底**：Esc 中断的 turn（Stop 不触发）会在会话结束时由
+SessionEnd hook 补录，时长含接管后的手动操作时间；完全在 agent 之外做的
+手工工作用 `--log` 自己记一条（工具列 `manual`，`--minutes` 可省略，项目名
+默认当前目录）。在 Claude 会话里也可以直接说「记一条工作日志：xxx」让
+agent 替你执行。
 
 `summarize.py` 内部会先调用一次 `collect_opencode.py` 再整合，所以单独手动跑 `--daily`/`--weekly` 已经包含最新的 opencode 数据。
 
@@ -134,4 +141,5 @@ python3 -m unittest discover -s tests -v
 - **怀疑流水本身丢数据**：不要慌，`.raw/*.tsv` 是唯一真相源、只增不改。任何 md 都能删了重新生成来验证。
 - **待确认关联一直挂在日报里**：说明 `.state/tapd_pending.json` 里有没处理的条目，跑一次 `--link` 逐条确认（或把对应 scope 从文件里删掉）后脚注就会消失。若怀疑是模型反复把同一条目标成待确认，确认一次「无关联」即可永久否决。
 - **自指风险复发**（日报里出现数据目录项目的条目）：说明 `collect_opencode.py` 里的排除逻辑失效了，需要重新检查该脚本对项目名的过滤条件。
+- **Esc 中断的 turn 没有记录**：确认 SessionEnd hook 已注册（旧版本安装的没有这条，重跑一次安装命令即可）；它只兜底「会话结束时尚未记录的最后一个 turn」，中断后继续在原会话工作不受影响。
 - **换了仓库位置**：`git pull` 移动目录后重跑一次 `./install.py`，hooks 里的旧路径会被替换，定时任务会指向新位置。

@@ -244,3 +244,72 @@ class TestClaudeStop(ClaudeHookTestCase):
         self.assertEqual(worklog.read_day(datetime.now()), [])
         self.assertIsNotNone(worklog.read_mark("claude", "s5"))
 
+
+class TestClaudeSessionEnd(ClaudeHookTestCase):
+    """Esc 中断兜底：会话结束时 prompt 缓存还在 = 最后一个 turn 没被 Stop 记录。"""
+
+    def setUp(self):
+        super().setUp()
+        self.cache = tempfile.TemporaryDirectory()
+        os.environ["WORKLOG_CACHE"] = self.cache.name
+
+    def tearDown(self):
+        os.environ.pop("WORKLOG_CACHE", None)
+        self.cache.cleanup()
+        super().tearDown()
+
+    def test_unconsumed_cache_is_backfilled(self):
+        import worklog
+        self.run_hook(
+            "claude_prompt.py",
+            {"session_id": "e1", "cwd": "/a/my-repo", "prompt": "部署到预发环境"},
+        )
+        # 用户 Esc 中断接管，Stop 从未触发，直接结束会话
+        result = self.run_hook(
+            "claude_session_end.py", {"session_id": "e1", "cwd": "/a/my-repo"}
+        )
+        self.assertEqual(result.returncode, 0)
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][1], "my-repo")
+        self.assertEqual(rows[0][2], "部署到预发环境")
+        self.assertEqual(rows[0][3], "claude")
+        self.assertIsNotNone(rows[0][4])
+
+    def test_consumed_cache_writes_nothing(self):
+        import worklog
+        self.run_hook("claude_prompt.py", {"session_id": "e2", "cwd": "/a/repo", "prompt": "正常任务"})
+        self.run_hook("claude_stop.py", {"session_id": "e2", "cwd": "/a/repo"})
+        self.run_hook("claude_session_end.py", {"session_id": "e2", "cwd": "/a/repo"})
+        # 只有 Stop 那一条，SessionEnd 不重复记录
+        self.assertEqual(len(worklog.read_day(datetime.now())), 1)
+
+    def test_without_cache_is_noop(self):
+        import worklog
+        result = self.run_hook("claude_session_end.py", {"session_id": "e3", "cwd": "/a/repo"})
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(worklog.read_day(datetime.now()), [])
+
+    def test_backfill_takes_duration_remainder_not_full_span(self):
+        # 中断前已有清单项完成拿走了一段时长，SessionEnd 只拿剩余尾段
+        import time
+        import worklog
+        import claude_prompt
+        import claude_session_end
+
+        started = datetime.now()
+        worklog.set_mark("claude", "e4", started)
+        claude_prompt.cache_path("e4").parent.mkdir(parents=True, exist_ok=True)
+        claude_prompt.cache_path("e4").write_text("大任务", encoding="utf-8")
+        self.run_hook(
+            "claude_task.py",
+            {"session_id": "e4", "cwd": "/a/repo", "task_subject": "子任务一"},
+        )
+        claude_session_end.main_with_payload({"session_id": "e4", "cwd": "/a/repo"})
+
+        rows = worklog.read_day(datetime.now())
+        self.assertEqual(len(rows), 2)
+        total = sum(row[4] or 0 for row in rows)
+        self.assertLessEqual(total, int(time.time() - started.timestamp()) + 1)
+
+
