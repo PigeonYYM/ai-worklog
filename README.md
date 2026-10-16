@@ -62,7 +62,7 @@ Removes hook registrations and scheduled jobs. **Your data directory is left unt
 ## Data
 
 - `<data-dir>/.raw/YYYY-MM-DD.tsv` — the stream, append-only, **the single source of truth**. Five tab-separated columns: time, project, title, source tool, duration in seconds
-- `<data-dir>/YYYY-MM-DD.md` — daily report, a derived artifact, fully rebuilt every night
+- `<data-dir>/YYYY-MM-DD.md` — daily report, a derived artifact: a **draft render** every hour at :53 during the day (plain script, zero model cost) and the **model render** nightly at 21:07 (both full rebuilds; the hourly job can be disabled with `--no-hourly`)
 - `<data-dir>/weekly/YYYY-Www.md` — weekly report, a derived artifact, built weekly
 - `<data-dir>/.state/` — watermarks (`opencode.cursor`), launchd logs, TAPD linking state (`tapd_links.json` / `tapd_pending.json`)
 - `<data-dir>/.state/marks/` — per-session duration start marks (`<tool>-<session>.mark`)
@@ -134,7 +134,7 @@ All tests redirect via the `WORKLOG_HOME` environment variable and a temporary H
 
 ## Troubleshooting
 
-- **Reports not updating**: check `<data-dir>/.state/daily.err` first, then `launchctl list | grep worklog` to confirm both jobs are loaded with exit code 0.
+- **Reports not updating**: check `<data-dir>/.state/daily.err` first, then `launchctl list | grep worklog` to confirm the jobs are loaded with exit code 0 (three of them: daily model render, weekly report, hourly draft).
 - **Summarize degraded to grouped render instead of model**: usually the model is unavailable (network/auth) or its output failed the three hard validations. The stream is intact — rerun another day; the md can always be rebuilt from the stream.
 - **An opencode session wasn't recorded**: check whether the watermark in `<data-dir>/.state/opencode.cursor` was accidentally advanced (e.g. a manual collect without a summarize). Edit it back to an earlier timestamp; the next collect rescans.
 - **Suspect stream data loss**: don't panic — `.raw/*.tsv` is append-only and the single source of truth. Any md can be deleted and regenerated to verify.

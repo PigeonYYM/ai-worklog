@@ -146,7 +146,8 @@ class TestUninstall(InstallTestCase):
 class TestRenderPlist(InstallTestCase):
     def test_daily_plist_contents(self):
         config = self.make_config(model="kimi-for-coding/k3")
-        plist = install.render_plist("com.worklog.daily", "--daily", config,
+        plist = install.render_plist("com.worklog.daily", ["--daily"],
+                                     {"Hour": 21, "Minute": 7}, config,
                                      self.script_dir, self.home)
         self.assertEqual(plist["ProgramArguments"],
                          ["/usr/bin/python3", "/repo/ai-worklog/summarize.py", "--daily"])
@@ -156,13 +157,25 @@ class TestRenderPlist(InstallTestCase):
         self.assertEqual(env["WORKLOG_MODEL"], "kimi-for-coding/k3")
         self.assertNotIn("WORKLOG_TAPD", env)
 
-    def test_weekly_plist_has_weekday(self):
-        plist = install.render_plist("com.worklog.weekly", "--weekly", self.make_config(),
-                                     self.script_dir, self.home)
-        self.assertEqual(plist["StartCalendarInterval"]["Weekday"], 5)
+    def test_weekly_job_has_weekday(self):
+        jobs = dict((name, (args, interval)) for name, args, interval
+                    in install.scheduled_jobs(self.make_config()))
+        self.assertEqual(jobs["weekly"][1]["Weekday"], 5)
+
+    def test_hourly_job_uses_no_model(self):
+        jobs = dict((name, (args, interval)) for name, args, interval
+                    in install.scheduled_jobs(self.make_config()))
+        self.assertEqual(jobs["hourly"][0], ["--daily", "--no-model"])
+        self.assertEqual(jobs["hourly"][1], {"Minute": 53})
+
+    def test_hourly_job_absent_when_disabled(self):
+        names = [name for name, _, _ in install.scheduled_jobs(
+            self.make_config(hourly_intraday=False))]
+        self.assertNotIn("hourly", names)
 
     def test_tapd_off_writes_env(self):
-        plist = install.render_plist("com.worklog.daily", "--daily",
+        plist = install.render_plist("com.worklog.daily", ["--daily"],
+                                     {"Hour": 21, "Minute": 7},
                                      self.make_config(tapd_enabled=False),
                                      self.script_dir, self.home)
         self.assertEqual(plist["EnvironmentVariables"]["WORKLOG_TAPD"], "off")
@@ -173,7 +186,8 @@ class TestCollectConfig(InstallTestCase):
         import argparse
         base = dict(yes=True, data_dir=None, model=None, daily_time=None,
                     weekly_time=None, weekly_day=None, claude_level=None,
-                    no_tapd=False, tools=None, uninstall=False, action=None)
+                    no_tapd=False, no_hourly=False, tools=None, uninstall=False,
+                    action=None)
         base.update(overrides)
         return argparse.Namespace(**base)
 
@@ -185,7 +199,7 @@ class TestCollectConfig(InstallTestCase):
         self.assertTrue(config.tapd_enabled)
 
     def test_interactive_answers(self):
-        answers = iter(["claude", "balanced", "/tmp/data", "my-model", "22:00", "20:30", "1", "n"])
+        answers = iter(["claude", "balanced", "/tmp/data", "my-model", "22:00", "20:30", "1", "n", "n"])
         args = self.make_args(yes=False)
         config = install.collect_config(args, input_fn=lambda p: next(answers))
         self.assertEqual(config.tools, ["claude"])
@@ -195,6 +209,7 @@ class TestCollectConfig(InstallTestCase):
         self.assertEqual(config.daily_time, (22, 0))
         self.assertEqual(config.weekly_day, 1)
         self.assertFalse(config.tapd_enabled)
+        self.assertFalse(config.hourly_intraday)
 
     def test_bad_time_rejected(self):
         args = self.make_args(daily_time="25:00")

@@ -257,6 +257,29 @@ class TestRunModelStub(SummarizeTestCase):
 
 
 class TestDailyFallbackPath(SummarizeTestCase):
+    def test_no_model_skips_model_even_when_available(self):
+        # 白天每小时毛坯更新：--no-model 必须完全绕开模型调用，
+        # 否则每小时一次的定时任务会产生模型成本。
+        import summarize
+        import worklog
+        when = datetime(2026, 9, 11, 19, 2)
+        worklog.append_record(when, "repo-a", "做了某事", "claude")
+
+        def should_not_run(prompt):
+            raise AssertionError("--no-model 不该调用模型")
+
+        original = summarize.run_model
+        summarize.run_model = should_not_run
+        os.environ["WORKLOG_SKIP_COLLECT"] = "1"
+        try:
+            code = summarize.daily(when, no_model=True)
+        finally:
+            summarize.run_model = original
+            os.environ.pop("WORKLOG_SKIP_COLLECT", None)
+        self.assertEqual(code, 0)
+        text = (worklog.report_dir() / "2026-09-11.md").read_text(encoding="utf-8")
+        self.assertIn("做了某事", text)
+
     def test_falls_back_when_model_unavailable(self):
         import summarize
         import worklog

@@ -62,7 +62,7 @@ cd ai-worklog
 ## 数据
 
 - `<数据目录>/.raw/YYYY-MM-DD.tsv` — 流水，append-only，**唯一真相源**。五列：时间、项目、标题、来源工具、时长秒（tab 分隔）
-- `<数据目录>/YYYY-MM-DD.md` — 日报，派生产物，每晚全量重建
+- `<数据目录>/YYYY-MM-DD.md` — 日报，派生产物：白天每小时第 53 分出**毛坯版**（纯脚本渲染，零模型成本），每晚 21:07 出**模型精整版**（均全量重建；小时任务可用 `--no-hourly` 关闭）
 - `<数据目录>/weekly/YYYY-Www.md` — 周报，派生产物，每周生成
 - `<数据目录>/.state/` — 水位线（`opencode.cursor`）、launchd 日志、TAPD 关联状态（`tapd_links.json` / `tapd_pending.json`）
 - `<数据目录>/.state/marks/` — 各工具会话的时长起点标记（`<工具>-<会话>.mark`）
@@ -135,7 +135,7 @@ python3 -m unittest discover -s tests -v
 
 ## 排障
 
-- **日报/周报没更新**：先看 `<数据目录>/.state/daily.err`，再用 `launchctl list | grep worklog` 确认两个任务已加载、上次退出码是 0。
+- **日报/周报没更新**：先看 `<数据目录>/.state/daily.err`，再用 `launchctl list | grep worklog` 确认定时任务已加载、上次退出码是 0（共三个任务：daily 精整、weekly 周报、hourly 毛坯）。
 - **整合退化成分组渲染而非模型**：原因通常是模型不可用（网络/鉴权）或输出没通过三条硬性校验。流水本身完好，改天/重跑一次即可，不用管 md——它随时可从流水重建。
 - **opencode 漏记某次会话**：检查 `<数据目录>/.state/opencode.cursor` 水位线是否被意外提前推进过（比如手动跑过一次采集又没让它整合），必要时直接编辑回退时间戳，下次采集会重新扫描。
 - **怀疑流水本身丢数据**：不要慌，`.raw/*.tsv` 是唯一真相源、只增不改。任何 md 都能删了重新生成来验证。

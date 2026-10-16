@@ -385,21 +385,21 @@ def pull_opencode() -> None:
         print("opencode 采集跳过: {}".format(exc), file=sys.stderr)
 
 
-def daily(day: datetime) -> int:
+def daily(day: datetime, no_model: bool = False) -> int:
     with summarize_lock():
         pull_opencode()
         rows = worklog.read_day(day)
         if not rows:
             print("{:%Y-%m-%d} 无记录，跳过".format(day))
             return 0
-        body = run_model(build_daily_prompt(rows, day))
+        body = None if no_model else run_model(build_daily_prompt(rows, day))
         if body and validate(body, rows):
             body = apply_tapd(body, "daily {:%Y-%m-%d}".format(day))
             content = body.rstrip() + "\n"
             source = "模型"
         else:
             content = render_fallback(rows, day)
-            source = "退化渲染"
+            source = "脚本渲染" if no_model else "退化渲染"
         target = worklog.report_dir() / "{:%Y-%m-%d}.md".format(day)
         table = hours_table(rows)
         if table:
@@ -486,6 +486,8 @@ def main() -> int:
     parser.add_argument("--log", help="手动补录一条流水（agent 之外的手工工作），值为标题")
     parser.add_argument("--minutes", type=int, help="补录条目的时长（分钟），默认未知")
     parser.add_argument("--project", help="补录条目的项目名，默认当前目录名")
+    parser.add_argument("--no-model", action="store_true",
+                        help="跳过模型直接用脚本分组渲染（白天高频毛坯更新用，零模型成本）")
     args = parser.parse_args()
 
     if args.log is not None:
@@ -498,7 +500,7 @@ def main() -> int:
         return hours_report(start, day)
     if args.weekly:
         return weekly(day)
-    return daily(day)
+    return daily(day, no_model=args.no_model)
 
 
 if __name__ == "__main__":

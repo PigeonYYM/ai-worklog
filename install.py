@@ -72,7 +72,7 @@ def materialize(runtime_dir: Path, out=print) -> None:
 
 class Config:
     def __init__(self, data_dir, model, daily_time, weekly_time, weekly_day, tools,
-                 claude_level="detailed", tapd_enabled=True):
+                 claude_level="detailed", tapd_enabled=True, hourly_intraday=True):
         self.data_dir = data_dir          # Path，已展开 ~
         self.model = model                # str，可为空（用 opencode 默认模型）
         self.daily_time = daily_time      # (hour, minute)
@@ -81,6 +81,7 @@ class Config:
         self.tools = tools                # ["claude", "codex", ...]
         self.claude_level = claude_level  # detailed / balanced / minimal
         self.tapd_enabled = tapd_enabled  # 关闭时往 plist 写 WORKLOG_TAPD=off
+        self.hourly_intraday = hourly_intraday  # 白天每小时出毛坯版日报
 
 
 # ---------- hooks 合并 ----------
@@ -148,11 +149,7 @@ def remove_hooks(settings_path: Path) -> None:
 
 # ---------- launchd ----------
 
-def render_plist(label: str, mode: str, config: Config, script_dir: Path, home: Path) -> dict:
-    hour, minute = config.daily_time if mode == "--daily" else config.weekly_time
-    interval = {"Hour": hour, "Minute": minute}
-    if mode == "--weekly":
-        interval["Weekday"] = config.weekly_day
+def render_plist(label, summarize_args, interval, config, script_dir, home) -> dict:
     env = {
         "HOME": str(home),
         "PATH": PLIST_PATH,
@@ -162,15 +159,29 @@ def render_plist(label: str, mode: str, config: Config, script_dir: Path, home: 
         env["WORKLOG_MODEL"] = config.model
     if not config.tapd_enabled:
         env["WORKLOG_TAPD"] = "off"
+    name = label.rsplit(".", 1)[-1]
     return {
         "Label": label,
-        "ProgramArguments": ["/usr/bin/python3", str(script_dir / "summarize.py"), mode],
+        "ProgramArguments": ["/usr/bin/python3", str(script_dir / "summarize.py")] + summarize_args,
         "WorkingDirectory": str(script_dir),
         "StartCalendarInterval": interval,
         "EnvironmentVariables": env,
-        "StandardOutPath": str(config.data_dir / ".state" / "{}.log".format(mode[2:])),
-        "StandardErrorPath": str(config.data_dir / ".state" / "{}.err".format(mode[2:])),
+        "StandardOutPath": str(config.data_dir / ".state" / "{}.log".format(name)),
+        "StandardErrorPath": str(config.data_dir / ".state" / "{}.err".format(name)),
     }
+
+
+def scheduled_jobs(config: Config):
+    """三个定时任务：晚上模型精整日报、每周周报、白天每小时毛坯日报（可选）。"""
+    dh, dm = config.daily_time
+    wh, wm = config.weekly_time
+    jobs = [
+        ("daily", ["--daily"], {"Hour": dh, "Minute": dm}),
+        ("weekly", ["--weekly"], {"Hour": wh, "Minute": wm, "Weekday": config.weekly_day}),
+    ]
+    if config.hourly_intraday:
+        jobs.append(("hourly", ["--daily", "--no-model"], {"Minute": 53}))
+    return jobs
 
 
 def install_launchd(config: Config, script_dir: Path, home: Path, out=print) -> None:
@@ -184,11 +195,18 @@ def install_launchd(config: Config, script_dir: Path, home: Path, out=print) -> 
                            capture_output=True)
             legacy_plist.unlink()
             out("已移除旧版定时任务 {}".format(legacy))
-    for name, mode in (("daily", "--daily"), ("weekly", "--weekly")):
+    wanted = {"com.worklog.{}".format(name) for name, _, _ in scheduled_jobs(config)}
+    # 之前装过、这次配置里关掉的任务（如 hourly），顺手卸载移除
+    for stale in agents.glob("com.worklog.*.plist"):
+        if stale.stem not in wanted:
+            subprocess.run(["launchctl", "unload", str(stale)], capture_output=True)
+            stale.unlink()
+            out("已移除 {}".format(stale.stem))
+    for name, summarize_args, interval in scheduled_jobs(config):
         label = "com.worklog.{}".format(name)
         target = agents / "{}.plist".format(label)
         with target.open("wb") as handle:
-            plistlib.dump(render_plist(label, mode, config, script_dir, home), handle)
+            plistlib.dump(render_plist(label, summarize_args, interval, config, script_dir, home), handle)
         subprocess.run(["launchctl", "unload", str(target)], capture_output=True)
         result = subprocess.run(["launchctl", "load", str(target)], capture_output=True)
         if result.returncode == 0:
@@ -199,12 +217,10 @@ def install_launchd(config: Config, script_dir: Path, home: Path, out=print) -> 
 
 def uninstall_launchd(home: Path, out=print) -> None:
     agents = home / "Library" / "LaunchAgents"
-    for name in ("daily", "weekly"):
-        target = agents / "com.worklog.{}.plist".format(name)
-        if target.exists():
-            subprocess.run(["launchctl", "unload", str(target)], capture_output=True)
-            target.unlink()
-            out("已移除 {}".format(target.name))
+    for stale in agents.glob("com.worklog.*.plist"):
+        subprocess.run(["launchctl", "unload", str(stale)], capture_output=True)
+        stale.unlink()
+        out("已移除 {}".format(stale.name))
 
 
 def print_cron_hint(config: Config, script_dir: Path, out=print) -> None:
@@ -287,8 +303,14 @@ def collect_config(args, input_fn=input) -> Config:
         tapd_enabled = True
     else:
         tapd_enabled = _ask(input_fn, "启用 TAPD 需求关联（需要后续放入需求清单文件）？(y/n)", "y").lower() != "n"
+    if args.no_hourly:
+        hourly_intraday = False
+    elif args.yes:
+        hourly_intraday = True
+    else:
+        hourly_intraday = _ask(input_fn, "白天每小时更新毛坯版日报（晚上仍出模型精整版）？(y/n)", "y").lower() != "n"
     return Config(data_dir, model, daily_time, weekly_time, weekly_day, tools,
-                  claude_level, tapd_enabled)
+                  claude_level, tapd_enabled, hourly_intraday)
 
 
 # ---------- 安装 / 卸载 ----------
@@ -338,6 +360,7 @@ def main(argv=None, home: Path = None, input_fn=input) -> int:
     parser.add_argument("--claude-level", choices=list(CLAUDE_LEVEL_HOOKS),
                         help="claude 记录粒度：detailed=每turn+每清单项，balanced=每turn，minimal=仅清单项")
     parser.add_argument("--no-tapd", action="store_true", help="关闭 TAPD 需求关联")
+    parser.add_argument("--no-hourly", action="store_true", help="不装白天每小时毛坯日报任务")
     parser.add_argument("--tools", help="只注册指定工具，逗号分隔（claude,codex,opencode）；默认探测到的全部")
     parser.add_argument("--runtime-dir", help="物化运行脚本的稳定目录，默认 ~/.ai-worklog（仅 npx/插件等临时目录运行时生效）")
     parser.add_argument("--no-claude-hooks", action="store_true",
