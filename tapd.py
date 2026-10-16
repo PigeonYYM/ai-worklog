@@ -136,3 +136,70 @@ def expand_annotations(body: str, tasks: List[dict]) -> str:
         return "（关联需求：{} [{}]）".format(title, tapd_id)
 
     return ANNOTATION.sub(repl, body)
+
+
+TAG = re.compile(r"【([^】]+)】")
+MIN_LCS = 4  # 最长公共子串的最小长度：低于 4 个字的重合不足为据
+
+
+def _lcs_len(a: str, b: str) -> int:
+    """最长公共子串长度。标题都短、候选就十几条，DP 开销可忽略。"""
+    if not a or not b:
+        return 0
+    prev = [0] * (len(b) + 1)
+    best = 0
+    for i in range(1, len(a) + 1):
+        curr = [0] * (len(b) + 1)
+        for j in range(1, len(b) + 1):
+            if a[i - 1] == b[j - 1]:
+                curr[j] = prev[j - 1] + 1
+                best = max(best, curr[j])
+        prev = curr
+    return best
+
+
+def suggest(title: str, tasks: List[dict]) -> List[str]:
+    """确定性启发式猜关联（给不调模型的毛坯渲染用）。
+
+    规则：【】标签命中（如【Trickcal】）权重最高；否则看最长公共子串，
+    ≥ MIN_LCS 字才计分。只有唯一最高分才返回，并列或都不够格返回空——
+    毛坯版的定位是「猜」，猜不准就闭嘴，宁可不标也不误导。
+    """
+    tags = set(TAG.findall(title))
+    scores = {}
+    for task in tasks:
+        score = 0
+        if tags & set(TAG.findall(task["title"])):
+            score += 100
+        lcs = _lcs_len(title, task["title"])
+        if lcs >= MIN_LCS:
+            score += lcs
+        if score:
+            scores[task["id"]] = score
+    if not scores:
+        return []
+    best = max(scores.values())
+    winners = [tid for tid, score in scores.items() if score == best]
+    return winners if len(winners) == 1 else []
+
+
+def draft_annotation(title: str, tasks: List[dict], links: Dict[str, str]) -> str:
+    """毛坯/降级渲染的条目后缀：用户确认的结论优先，否则启发式猜测（带问号）。
+
+    确认链接的 key 是模型压缩后的条目文本，与流水原标题用互相包含判断命中。
+    已确认「无关联」（id 为空）的条目直接压制猜测——用户的否决优先于启发式。
+    猜测标注 `（关联？：…）`，与模型确认的 `（关联需求：…）` 区分开。
+    """
+    titles = {task["id"]: task["title"] for task in tasks}
+    for item, tapd_id in links.items():
+        if not (item in title or title in item):
+            continue
+        if tapd_id and tapd_id in titles:
+            return "（关联需求：{} [{}]）".format(titles[tapd_id], tapd_id)
+        if not tapd_id:
+            return ""
+    guesses = suggest(title, tasks)
+    if guesses:
+        tapd_id = guesses[0]
+        return "（关联？：{} [{}]）".format(titles[tapd_id], tapd_id)
+    return ""

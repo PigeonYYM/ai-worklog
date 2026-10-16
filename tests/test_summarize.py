@@ -555,6 +555,31 @@ class TestLogRecord(SummarizeTestCase):
         self.assertEqual(worklog.read_day(datetime.now()), [])
 
 
+class TestFallbackTapdAnnotations(TapdSummarizeTestCase):
+    def test_fallback_render_annotates_guess(self):
+        import summarize
+        self.write_tasks()
+        rows = [("10:00", "repo", "【广告系统】AI 智能投放联调", "claude", 600)]
+        text = summarize.render_fallback(rows, datetime(2026, 10, 16))
+        self.assertIn("（关联？：", text)
+        self.assertIn("111", text)
+
+    def test_fallback_render_applies_confirmed_link(self):
+        import summarize
+        import tapd
+        self.write_tasks()
+        tapd.write_links({"AI 智能投放联调": "111"})
+        rows = [("10:00", "repo", "AI 智能投放联调收尾", "claude", 600)]
+        text = summarize.render_fallback(rows, datetime(2026, 10, 16))
+        self.assertIn("（关联需求：【广告系统】AI 智能投放 [111]）", text)
+
+    def test_fallback_silent_without_tasks_file(self):
+        import summarize
+        rows = [("10:00", "repo", "【广告系统】AI 智能投放联调", "claude", 600)]
+        text = summarize.render_fallback(rows, datetime(2026, 10, 16))
+        self.assertNotIn("关联", text)
+
+
 class TestLinkMode(TapdSummarizeTestCase):
     def test_confirm_choice_writes_link_clears_pending_rebuilds(self):
         import builtins

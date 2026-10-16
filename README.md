@@ -100,7 +100,15 @@ Drop `tapd_my_tasks.md` into `<data-dir>/tapd_task/` to auto-enable (can also be
 /usr/bin/python3 <repo-dir>/summarize.py --link   # interactively resolve the pending queue, then auto-rebuild affected reports
 ```
 
-Confirmations (including "no association") persist in `.state/tapd_links.json` and are injected into the prompt on rebuild. The degraded fallback render does no linking and doesn't touch the queue.
+Confirmations (including "no association") persist in `.state/tapd_links.json` and are injected into the prompt on rebuild.
+
+Draft/degraded renders (no model) also annotate links: user-confirmed conclusions
+are applied first (`（关联需求：…）`); otherwise a deterministic heuristic guesses
+(【】tag hit, or a unique longest-common-substring ≥ 4 chars), marked with a
+question mark (`（关联？：…）`). Guesses are re-derived on every rebuild and never
+stick; to correct one, run `--link` to confirm/veto (a vetoed item is never
+guessed again) or edit `.state/tapd_links.json` directly — the next render picks
+it up. The degraded render never touches the pending queue.
 
 ## Manual Operations
 

@@ -133,5 +133,70 @@ class TestExpandAnnotations(TapdTestCase):
         self.assertEqual(tapd.expand_annotations(body, tasks), "- 做了某事")
 
 
+TASKS = [
+    {"id": "111", "title": "【Trickcal】- 广告投放pLTV预测并回传-中R和大R模型", "kind": "需求"},
+    {"id": "222", "title": "【三谋韩国】- 广告平台接入GMO渠道的api", "kind": "需求"},
+    {"id": "333", "title": "【广告系统】AI 智能投放", "kind": "需求"},
+]
+
+
+class TestSuggest(TapdTestCase):
+    def test_tag_match_wins(self):
+        import tapd
+        self.assertEqual(tapd.suggest("Trickcal pLTV 事件联调", []), [])
+        self.assertEqual(
+            tapd.suggest("【Trickcal】回传联调", TASKS), ["111"]
+        )
+
+    def test_long_common_substring_unique(self):
+        import tapd
+        self.assertEqual(
+            tapd.suggest("三国韩服 S2S 离线回传事件洗数", TASKS + [
+                {"id": "x", "title": "无关需求", "kind": "需求"},
+            ]),
+            [],
+        )
+        self.assertEqual(
+            tapd.suggest("广告平台接入GMO渠道联调", TASKS), ["222"]
+        )
+
+    def test_short_overlap_is_not_evidence(self):
+        import tapd
+        self.assertEqual(tapd.suggest("广告日常维护", TASKS), [])  # 「广告」只有 2 字重合
+
+    def test_tie_returns_nothing(self):
+        import tapd
+        dup = TASKS + [{"id": "999", "title": "【Trickcal】另一条", "kind": "需求"}]
+        self.assertEqual(tapd.suggest("【Trickcal】联调", dup), [])
+        same_lcs = TASKS + [{"id": "888", "title": "【其他】广告投放优化", "kind": "需求"}]
+        self.assertEqual(tapd.suggest("广告投放联调", same_lcs), [])  # 「广告投放」撞两条
+
+
+class TestDraftAnnotation(TapdTestCase):
+    def test_confirmed_link_takes_precedence(self):
+        import tapd
+        links = {"模型压缩后的条目文本": "111"}
+        result = tapd.draft_annotation("模型压缩后的条目文本（阶段一）", TASKS, links)
+        self.assertIn("关联需求", result)
+        self.assertIn("111", result)
+
+    def test_guess_has_question_mark(self):
+        import tapd
+        result = tapd.draft_annotation("广告平台接入GMO渠道联调", TASKS, {})
+        self.assertIn("（关联？：", result)
+        self.assertIn("222", result)
+
+    def test_no_match_no_annotation(self):
+        import tapd
+        self.assertEqual(tapd.draft_annotation("完全无关的事情", TASKS, {}), "")
+
+    def test_rejected_link_is_not_applied(self):
+        import tapd
+        links = {"广告平台接入GMO渠道联调": ""}  # 用户确认过无关联
+        result = tapd.draft_annotation("广告平台接入GMO渠道联调", TASKS, links)
+        # 已否决的条目不该再贴猜测标注
+        self.assertEqual(result, "")
+
+
 if __name__ == "__main__":
     unittest.main()

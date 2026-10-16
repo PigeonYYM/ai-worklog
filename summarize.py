@@ -142,7 +142,23 @@ def hours_table(rows) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _draft_annotator():
+    """毛坯渲染的关联标注器；功能关闭或无候选时返回 None（零开销）。
+
+    猜测每次重建都重新推导、不固化——改关联随时通过 --link 或直接编辑
+    .state/tapd_links.json，下一次渲染即生效。
+    """
+    if not tapd_enabled():
+        return None
+    tasks = tapd.load_candidates()
+    if not tasks:
+        return None
+    links = tapd.read_links()
+    return lambda title: tapd.draft_annotation(title, tasks, links)
+
+
 def render_fallback(rows, day: datetime) -> str:
+    annotate = _draft_annotator()
     grouped = {}
     for row in rows:
         grouped.setdefault(row[1], []).append(row)
@@ -150,12 +166,14 @@ def render_fallback(rows, day: datetime) -> str:
     for project in sorted(grouped):
         out.append("## {}".format(project))
         for row in grouped[project]:
-            out.append("- {} {} ({})".format(row[0], row[2], record_suffix(row)))
+            suffix = annotate(row[2]) if annotate else ""
+            out.append("- {} {} ({}){}".format(row[0], row[2], record_suffix(row), suffix))
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 
 def render_weekly_fallback(dated_rows, start: datetime, end: datetime) -> str:
+    annotate = _draft_annotator()
     grouped = {}
     for day_text, row in dated_rows:
         grouped.setdefault(row[1], []).append((day_text, row))
@@ -167,7 +185,8 @@ def render_weekly_fallback(dated_rows, start: datetime, end: datetime) -> str:
     for project in sorted(grouped):
         out.append("## {}".format(project))
         for day_text, row in grouped[project]:
-            out.append("- {} {} ({})".format(day_text, row[2], record_suffix(row)))
+            suffix = annotate(row[2]) if annotate else ""
+            out.append("- {} {} ({}){}".format(day_text, row[2], record_suffix(row), suffix))
         out.append("")
     return "\n".join(out).rstrip() + "\n"
 
