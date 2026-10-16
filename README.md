@@ -8,6 +8,8 @@ Cross-tool worklog for AI coding assistants: Claude Code, Codex and OpenCode ses
 
 Three options — all walk you through the same interactive configuration (tool selection, Claude granularity, data directory, model, report times, TAPD toggle):
 
+> ⚠️ **Pick exactly one — do not mix them** (e.g. plugin marketplace *and* clone install). Claude hooks would be registered twice and every event recorded twice. Uninstall via the old method before switching.
+
 ### Option A: npx one-liner (recommended, no clone)
 
 ```bash
