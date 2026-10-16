@@ -13,10 +13,10 @@ Three options — all walk you through the same interactive configuration (tool 
 ### Option A: npx one-liner (recommended, no clone)
 
 ```bash
-npx -y git+ssh://git@github.com/PigeonYYM/ai-worklog.git
+npx -y git+https://github.com/PigeonYYM/ai-worklog.git
 ```
 
-Prerequisites: node/npm on your machine (guaranteed if you use Claude Code) and access to this private repo (uses your existing GitHub SSH key). Runtime scripts are materialized to `~/.ai-worklog/`; hooks and scheduled jobs point at that stable directory. Non-interactive: add `--yes` plus `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd/--tools` flags.
+Prerequisites: node/npm on your machine (guaranteed if you use Claude Code) and access to this private repo (via your GitHub HTTPS credentials, e.g. osxkeychain or a PAT). Runtime scripts are materialized to `~/.ai-worklog/`; hooks and scheduled jobs point at that stable directory. Non-interactive: add `--yes` plus `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd/--tools` flags.
 
 ### Option B: Claude Code plugin marketplace (hooks auto-update with the plugin)
 
@@ -33,7 +33,7 @@ Constraints: data directory is fixed to `~/daily-report` and granularity is fixe
 ### Option C: git clone (developers/maintainers)
 
 ```bash
-git clone git@github.com:PigeonYYM/ai-worklog.git
+git clone https://github.com/PigeonYYM/ai-worklog.git
 cd ai-worklog
 ./install.py
 ```

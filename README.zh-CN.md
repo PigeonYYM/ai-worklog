@@ -13,10 +13,10 @@
 ### 方式 A：npx 一键（推荐，免 clone）
 
 ```bash
-npx -y git+ssh://git@github.com:PigeonYYM/ai-worklog.git
+npx -y git+https://github.com/PigeonYYM/ai-worklog.git
 ```
 
-前提：本机有 node/npm（用 Claude Code 必有）、你有这个私有仓库的访问权限（走你已有的 GitHub SSH key）。运行脚本会被物化到 `~/.ai-worklog/`，hooks 与定时任务都指向这个稳定目录。非交互可加 `--yes` 及 `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd/--tools` 旗标。
+前提：本机有 node/npm（用 Claude Code 必有）、你有这个私有仓库的访问权限（走 GitHub HTTPS 凭据，如 osxkeychain 里存的账号或 PAT）。运行脚本会被物化到 `~/.ai-worklog/`，hooks 与定时任务都指向这个稳定目录。非交互可加 `--yes` 及 `--data-dir/--model/--daily-time/--weekly-time/--weekly-day/--claude-level/--no-tapd/--tools` 旗标。
 
 ### 方式 B：Claude Code 插件市场（hooks 随插件版本自动更新）
 
@@ -33,7 +33,7 @@ npx -y git+ssh://git@github.com:PigeonYYM/ai-worklog.git
 ### 方式 C：git clone（开发者/维护者）
 
 ```bash
-git clone git@github.com:PigeonYYM/ai-worklog.git
+git clone https://github.com/PigeonYYM/ai-worklog.git
 cd ai-worklog
 ./install.py
 ```
