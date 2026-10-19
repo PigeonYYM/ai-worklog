@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import plistlib
 import shutil
 import subprocess
@@ -250,6 +251,142 @@ def _ask(input_fn, prompt: str, default: str) -> str:
     return answer or default
 
 
+def _read_key_raw(fd) -> bytes:
+    """读一个按键（方向键展开为完整转义序列）。调用方须已处于 raw 模式。"""
+    ch = os.read(fd, 1)
+    if ch == b"\x1b":
+        ch += os.read(fd, 2)
+    return ch
+
+
+def _tui_select(prompt: str, labels, default: int = 0, multi: bool = False):
+    """方向键选择器（↑/↓ 移动，Enter 确认；multi 时空格切换勾选）。
+
+    零第三方依赖的最小实现；调用方负责只在 TTY 下使用。
+    注意：raw 模式必须在整个选择期间只进入一次——tty.setraw 默认
+    TCSAFLUSH 会丢弃队列里未读的按键，逐键进出 raw 会吃掉后面的键。
+    raw 模式下 OPOST 关闭，所有输出行必须显式 \\r\\n。
+    """
+    import termios
+    import tty
+
+    cursor = default
+    checked = [True] * len(labels) if multi else None
+    hint = "（↑/↓ 移动，空格勾选，Enter 确认）" if multi else "（↑/↓ 移动，Enter 确认）"
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+
+    def render(first=False):
+        if not first:
+            sys.stdout.write("\x1b[{}A".format(len(labels)))  # 光标移回选项区顶部
+        for index, label in enumerate(labels):
+            pointer = "❯" if index == cursor else " "
+            box = ""
+            if multi:
+                box = "[x] " if checked[index] else "[ ] "
+            sys.stdout.write("\x1b[2K{} {}{}\r\n".format(pointer, box, label))
+        sys.stdout.flush()
+
+    try:
+        tty.setraw(fd)
+        sys.stdout.write("\r\n\x1b[2K{}{}\r\n".format(prompt, hint))
+        sys.stdout.flush()
+        render(first=True)
+        while True:
+            key = _read_key_raw(fd)
+            if key == b"\x1b[A":
+                cursor = (cursor - 1) % len(labels)
+            elif key == b"\x1b[B":
+                cursor = (cursor + 1) % len(labels)
+            elif key == b" " and multi:
+                checked[cursor] = not checked[cursor]
+            elif key in (b"\r", b"\n"):
+                break
+            else:
+                continue
+            render()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    print()
+    if multi:
+        picked = [i for i, on in enumerate(checked) if on]
+        return picked or list(range(len(labels)))  # 全不勾视为全选
+    return cursor
+
+
+def _use_tui(input_fn) -> bool:
+    """只有真实交互终端（未注入 input_fn）才走方向键界面，否则退回编号输入。"""
+    return input_fn is input and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+_CUSTOM = object()  # 选项里的「自定义」哨兵：选中后转入自由输入
+
+
+def _choose(input_fn, prompt: str, options, default: int = 0):
+    """单选。options 为 [(label, value), ...]，回车取 default（0 基索引）。"""
+    if _use_tui(input_fn):
+        index = _tui_select(prompt, [label for label, _ in options], default)
+        return options[index][1]
+    print(prompt)
+    for index, (label, _) in enumerate(options, 1):
+        print("  {}. {}".format(index, label))
+    raw = input_fn("选择 [{}]: ".format(default + 1)).strip()
+    if not raw:
+        return options[default][1]
+    if raw.isdigit() and 1 <= int(raw) <= len(options):
+        return options[int(raw) - 1][1]
+    raise ValueError("无效选择：{}".format(raw))
+
+
+def _choose_multi(input_fn, prompt: str, values):
+    """多选（回车=全选）。TTY 下方向键+空格，否则编号逗号分隔。"""
+    if _use_tui(input_fn):
+        indexes = _tui_select(prompt, values, multi=True)
+        return [values[i] for i in indexes]
+    print(prompt)
+    for index, value in enumerate(values, 1):
+        print("  {}. {}".format(index, value))
+    raw = input_fn("选择（可多选，如 1,2；回车=全部）: ").strip()
+    if not raw:
+        return list(values)
+    picked = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit() and 1 <= int(part) <= len(values):
+            picked.append(values[int(part) - 1])
+        else:
+            raise ValueError("无效选择：{}".format(part))
+    return picked
+
+
+def _choose_or_custom(input_fn, prompt, options, custom_prompt, custom_default):
+    """带「自定义」尾项的单选：选中自定义则转入 _ask 自由输入。"""
+    value = _choose(input_fn, prompt, options + [("自定义", _CUSTOM)])
+    if value is _CUSTOM:
+        return _ask(input_fn, custom_prompt, custom_default)
+    return value
+
+
+def detect_models():
+    """从本机 opencode 读取已配置好的可用模型列表（`opencode models`）。
+
+    读取失败（未安装/超时/输出为空）返回空列表，模型选择退化为
+    「默认模型 + 自定义输入」两项。
+    """
+    binary = shutil.which("opencode")
+    if not binary:
+        return []
+    try:
+        result = subprocess.run([binary, "models"], capture_output=True,
+                                text=True, timeout=15, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 LEVEL_LABELS = {
     "detailed": "详细 —— 每个 turn + 每个任务清单项都记录（流水最多）",
     "balanced": "适中 —— 每个 turn 记录一条",
@@ -269,46 +406,58 @@ def collect_config(args, input_fn=input) -> Config:
             raise ValueError("未知工具：{}".format(",".join(invalid)))
     elif args.yes:
         tools = list(detected)
+    elif detected:
+        tools = _choose_multi(input_fn, "为哪些工具注册 hook（已自动探测）：", detected)
     else:
-        print("探测到的工具：{}".format("、".join(detected) or "（无）"))
-        answer = _ask(input_fn, "为哪些工具注册 hook（逗号分隔）", ",".join(detected))
-        tools = [t.strip() for t in answer.split(",") if t.strip() in ("claude", "codex", "opencode")]
-
-    def pick(flag, prompt, default):
-        if flag is not None:
-            return flag
-        if args.yes:
-            return default
-        return _ask(input_fn, prompt, default)
+        tools = []
 
     claude_level = args.claude_level or "detailed"
     if "claude" in tools and not args.yes and not args.claude_level:
-        print("Claude Code 记录粒度：")
-        for key in ("detailed", "balanced", "minimal"):
-            print("  {}. {}".format(key, LEVEL_LABELS[key]))
-        claude_level = _ask(input_fn, "选择粒度（detailed/balanced/minimal）", "detailed")
+        claude_level = _choose(input_fn, "Claude Code 记录粒度：",
+                               [(LEVEL_LABELS[key], key)
+                                for key in ("detailed", "balanced", "minimal")])
     if claude_level not in CLAUDE_LEVEL_HOOKS:
         raise ValueError("claude 粒度必须是 {}".format("/".join(CLAUDE_LEVEL_HOOKS)))
 
-    data_dir = Path(pick(args.data_dir, "数据目录（流水/日报/周报）", "~/daily-report")).expanduser()
-    model = pick(args.model, "整合模型（留空用 opencode 默认模型）", "")
-    daily_time = _parse_time(pick(args.daily_time, "日报生成时间 HH:MM", "21:07"))
-    weekly_time = _parse_time(pick(args.weekly_time, "周报生成时间 HH:MM", "21:20"))
-    weekly_day = int(pick(args.weekly_day, "周报在周几生成（0=周日 … 5=周五）", "5"))
+    if args.yes:
+        data_dir = Path((args.data_dir or "~/daily-report")).expanduser()
+        model = args.model or ""
+        daily_time = _parse_time(args.daily_time or "21:07")
+        weekly_time = _parse_time(args.weekly_time or "21:20")
+        weekly_day = int(args.weekly_day or "5")
+        tapd_enabled = not args.no_tapd
+        hourly_intraday = not args.no_hourly
+    else:
+        data_dir = Path(_choose_or_custom(
+            input_fn, "数据目录（流水/日报/周报）：",
+            [("~/daily-report（推荐）", "~/daily-report")],
+            "输入数据目录路径", "~/daily-report")).expanduser()
+        model_options = [("留空，用 opencode 配置的默认模型（推荐）", "")]
+        model_options += [(model, model) for model in detect_models()]
+        model = _choose_or_custom(
+            input_fn, "整合模型（列表来自本机 opencode 已配置的模型）：",
+            model_options, "输入模型名", "")
+        daily_time = _parse_time(_choose_or_custom(
+            input_fn, "日报生成时间：",
+            [("21:07（推荐）", "21:07"), ("20:00", "20:00"), ("22:00", "22:00")],
+            "输入时间 HH:MM", "21:07"))
+        weekly_time = _parse_time(_choose_or_custom(
+            input_fn, "周报生成时间：",
+            [("21:20（推荐）", "21:20"), ("20:00", "20:00"), ("22:00", "22:00")],
+            "输入时间 HH:MM", "21:20"))
+        weekly_day = _choose_or_custom(
+            input_fn, "周报在周几生成：",
+            [("周五（推荐）", 5), ("周六", 6), ("周日", 0)],
+            "输入 0-7（0=周日）", "5")
+        weekly_day = int(weekly_day)
+        tapd_enabled = False if args.no_tapd else _choose(
+            input_fn, "启用 TAPD 需求关联（需要后续放入需求清单文件）：",
+            [("启用（推荐）", True), ("关闭", False)])
+        hourly_intraday = False if args.no_hourly else _choose(
+            input_fn, "白天每小时更新毛坯版日报（晚上仍出模型精整版）：",
+            [("开启（推荐）", True), ("关闭", False)])
     if not 0 <= weekly_day <= 7:
         raise ValueError("weekly_day 必须在 0-7 之间")
-    if args.no_tapd:
-        tapd_enabled = False
-    elif args.yes:
-        tapd_enabled = True
-    else:
-        tapd_enabled = _ask(input_fn, "启用 TAPD 需求关联（需要后续放入需求清单文件）？(y/n)", "y").lower() != "n"
-    if args.no_hourly:
-        hourly_intraday = False
-    elif args.yes:
-        hourly_intraday = True
-    else:
-        hourly_intraday = _ask(input_fn, "白天每小时更新毛坯版日报（晚上仍出模型精整版）？(y/n)", "y").lower() != "n"
     return Config(data_dir, model, daily_time, weekly_time, weekly_day, tools,
                   claude_level, tapd_enabled, hourly_intraday)
 

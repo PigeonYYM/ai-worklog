@@ -199,9 +199,15 @@ class TestCollectConfig(InstallTestCase):
         self.assertTrue(config.tapd_enabled)
 
     def test_interactive_answers(self):
-        answers = iter(["claude", "balanced", "/tmp/data", "my-model", "22:00", "20:30", "1", "n", "n"])
+        answers = iter(["1", "2", "2", "/tmp/data", "2", "my-model",
+                        "4", "22:00", "4", "20:30", "4", "1", "2", "2"])
         args = self.make_args(yes=False)
-        config = install.collect_config(args, input_fn=lambda p: next(answers))
+        original = install.detect_models
+        install.detect_models = lambda: []
+        try:
+            config = install.collect_config(args, input_fn=lambda p: next(answers))
+        finally:
+            install.detect_models = original
         self.assertEqual(config.tools, ["claude"])
         self.assertEqual(config.claude_level, "balanced")
         self.assertEqual(config.data_dir, Path("/tmp/data"))
@@ -210,6 +216,44 @@ class TestCollectConfig(InstallTestCase):
         self.assertEqual(config.weekly_day, 1)
         self.assertFalse(config.tapd_enabled)
         self.assertFalse(config.hourly_intraday)
+
+    def test_interactive_can_pick_detected_model(self):
+        # 模型选项来自本机 opencode 已配置模型：第 2 项即探测到的第一个模型
+        answers = iter(["1", "1", "1", "2", "1", "1", "1", "1", "1"])
+        args = self.make_args(yes=False)
+        original = install.detect_models
+        install.detect_models = lambda: ["kimi-code-plan-cn/k3"]
+        try:
+            config = install.collect_config(args, input_fn=lambda p: next(answers))
+        finally:
+            install.detect_models = original
+        self.assertEqual(config.model, "kimi-code-plan-cn/k3")
+
+    def test_detect_models_parses_opencode_output(self):
+        import subprocess as sp
+        original_run = install.subprocess.run
+        original_which = install.shutil.which
+
+        class FakeResult:
+            returncode = 0
+            stdout = "opencode/beam-free\nkimi-code-plan-cn/k3\n\n"
+
+        install.shutil.which = lambda name: "/fake/opencode"
+        install.subprocess.run = lambda *a, **kw: FakeResult()
+        try:
+            self.assertEqual(install.detect_models(),
+                             ["opencode/beam-free", "kimi-code-plan-cn/k3"])
+        finally:
+            install.subprocess.run = original_run
+            install.shutil.which = original_which
+
+    def test_detect_models_failure_returns_empty(self):
+        original_which = install.shutil.which
+        install.shutil.which = lambda name: None
+        try:
+            self.assertEqual(install.detect_models(), [])
+        finally:
+            install.shutil.which = original_which
 
     def test_bad_time_rejected(self):
         args = self.make_args(daily_time="25:00")
