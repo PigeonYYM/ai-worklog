@@ -6,7 +6,7 @@ Cross-tool worklog for AI coding assistants: Claude Code, Codex and OpenCode ses
 
 ## Installation
 
-Three options — all lead into the same **fully option-driven** setup: arrow keys to move, Space for multi-select, Enter to confirm (Enter alone takes the default). The model list is read live from your machine's configured opencode models (`opencode models`) — no typing. Covers: tool selection (multi), Claude granularity, data directory, summarization model, report times, TAPD toggle, hourly draft toggle.
+Three options — all lead into the same **fully option-driven** setup: arrow keys to move, Space for multi-select, Enter to confirm (Enter alone takes the default). The model list is read live from your machine's configured opencode models (`opencode models`), **pre-selected on the model you currently use** (from `~/.local/state/opencode/model.json`'s most-recent entry) — no typing. Covers: tool selection (multi), Claude granularity, data directory, summarization model, report times, TAPD toggle, hourly draft toggle.
 
 > ⚠️ **Pick exactly one — do not mix them** (e.g. plugin marketplace *and* clone install). Claude hooks would be registered twice and every event recorded twice. Uninstall via the old method before switching.
 

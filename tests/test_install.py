@@ -202,12 +202,14 @@ class TestCollectConfig(InstallTestCase):
         answers = iter(["1", "2", "2", "/tmp/data", "2", "my-model",
                         "4", "22:00", "4", "20:30", "4", "1", "2", "2"])
         args = self.make_args(yes=False)
-        original = install.detect_models
+        original_models, original_current = install.detect_models, install.detect_current_model
         install.detect_models = lambda: []
+        install.detect_current_model = lambda: ""
         try:
             config = install.collect_config(args, input_fn=lambda p: next(answers))
         finally:
-            install.detect_models = original
+            install.detect_models = original_models
+            install.detect_current_model = original_current
         self.assertEqual(config.tools, ["claude"])
         self.assertEqual(config.claude_level, "balanced")
         self.assertEqual(config.data_dir, Path("/tmp/data"))
@@ -221,13 +223,41 @@ class TestCollectConfig(InstallTestCase):
         # 模型选项来自本机 opencode 已配置模型：第 2 项即探测到的第一个模型
         answers = iter(["1", "1", "1", "2", "1", "1", "1", "1", "1"])
         args = self.make_args(yes=False)
-        original = install.detect_models
+        original_models, original_current = install.detect_models, install.detect_current_model
         install.detect_models = lambda: ["kimi-code-plan-cn/k3"]
+        install.detect_current_model = lambda: ""
         try:
             config = install.collect_config(args, input_fn=lambda p: next(answers))
         finally:
-            install.detect_models = original
+            install.detect_models = original_models
+            install.detect_current_model = original_current
         self.assertEqual(config.model, "kimi-code-plan-cn/k3")
+
+    def test_current_model_is_default_choice(self):
+        # 模型步骤直接回车（取默认）应选中 opencode 当前正在使用的模型
+        answers = iter(["1", "1", "1", "", "1", "1", "1", "1", "1"])
+        args = self.make_args(yes=False)
+        original_models, original_current = install.detect_models, install.detect_current_model
+        install.detect_models = lambda: ["other-provider/m1"]
+        install.detect_current_model = lambda: "kimi-code-plan-cn/k3"
+        try:
+            config = install.collect_config(args, input_fn=lambda p: next(answers))
+        finally:
+            install.detect_models = original_models
+            install.detect_current_model = original_current
+        self.assertEqual(config.model, "kimi-code-plan-cn/k3")
+
+    def test_detect_current_model_reads_recent_first(self):
+        home = Path(self.tmp.name)
+        state = home / ".local" / "state" / "opencode"
+        state.mkdir(parents=True)
+        (state / "model.json").write_text(json.dumps({
+            "recent": [{"providerID": "kimi-code-plan-cn", "modelID": "k3"}],
+        }), encoding="utf-8")
+        self.assertEqual(install.detect_current_model(home), "kimi-code-plan-cn/k3")
+
+    def test_detect_current_model_missing_file_returns_empty(self):
+        self.assertEqual(install.detect_current_model(Path(self.tmp.name)), "")
 
     def test_detect_models_parses_opencode_output(self):
         import subprocess as sp

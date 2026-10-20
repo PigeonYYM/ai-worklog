@@ -360,9 +360,9 @@ def _choose_multi(input_fn, prompt: str, values):
     return picked
 
 
-def _choose_or_custom(input_fn, prompt, options, custom_prompt, custom_default):
+def _choose_or_custom(input_fn, prompt, options, custom_prompt, custom_default, default: int = 0):
     """带「自定义」尾项的单选：选中自定义则转入 _ask 自由输入。"""
-    value = _choose(input_fn, prompt, options + [("自定义", _CUSTOM)])
+    value = _choose(input_fn, prompt, options + [("自定义", _CUSTOM)], default)
     if value is _CUSTOM:
         return _ask(input_fn, custom_prompt, custom_default)
     return value
@@ -385,6 +385,24 @@ def detect_models():
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def detect_current_model(home: Path = None) -> str:
+    """读取 opencode 当前正在使用的模型（state/model.json 的 recent[0]）。
+
+    返回 "provider/model" 形式；文件缺失或结构异常返回 ""。
+    """
+    home = home or Path.home()
+    try:
+        data = json.loads(
+            (home / ".local" / "state" / "opencode" / "model.json").read_text(encoding="utf-8")
+        )
+        recent = data.get("recent") or []
+        if recent:
+            return "{}/{}".format(recent[0]["providerID"], recent[0]["modelID"])
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        pass
+    return ""
 
 
 LEVEL_LABELS = {
@@ -432,11 +450,20 @@ def collect_config(args, input_fn=input) -> Config:
             input_fn, "数据目录（流水/日报/周报）：",
             [("~/daily-report（推荐）", "~/daily-report")],
             "输入数据目录路径", "~/daily-report")).expanduser()
-        model_options = [("留空，用 opencode 配置的默认模型（推荐）", "")]
-        model_options += [(model, model) for model in detect_models()]
+        available = detect_models()
+        current = detect_current_model()
+        model_options = [("留空，跟随 opencode 当前模型（以后换模型自动跟随）", "")]
+        default_index = 0
+        if current:
+            label = "{}（当前使用）".format(current)
+            model_options.append((label, current))
+            default_index = 1
+        for model in available:
+            if model != current:
+                model_options.append((model, model))
         model = _choose_or_custom(
-            input_fn, "整合模型（列表来自本机 opencode 已配置的模型）：",
-            model_options, "输入模型名", "")
+            input_fn, "整合模型（列表来自本机 opencode，已定位到当前使用项）：",
+            model_options, "输入模型名", "", default=default_index)
         daily_time = _parse_time(_choose_or_custom(
             input_fn, "日报生成时间：",
             [("21:07（推荐）", "21:07"), ("20:00", "20:00"), ("22:00", "22:00")],
