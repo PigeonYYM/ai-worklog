@@ -324,27 +324,45 @@ def rebuild_scope(scope: str) -> None:
         print("无法识别的 scope：{}，跳过重建".format(scope), file=sys.stderr)
 
 
+def _opencode_command():
+    try:
+        binary = collect_opencode.opencode_bin()
+    except RuntimeError:
+        return None
+    command = [binary, "run", "--pure"]
+    if MODEL:
+        command += ["-m", MODEL]
+    return command
+
+
+def _claude_command():
+    claude = os.environ.get("WORKLOG_CLAUDE") or shutil.which("claude")
+    if not claude:
+        return None
+    command = [claude, "-p"]
+    if MODEL:
+        command += ["--model", MODEL]
+    return command
+
+
 def model_runner():
     """选一个可用的模型执行后端，返回不含 prompt 的 argv 前缀；都不可用返回 None。
 
-    优先 opencode（既有行为）；用户没装 opencode 时回退 claude CLI——
-    没有后端的用户不该永远只能拿到退化渲染。WORKLOG_CLAUDE 可覆盖 claude
-    路径（测试用）。
+    WORKLOG_RUNNER=opencode|claude 可强制指定后端（安装时用户的选择会
+    写入定时任务环境）；未指定时优先 opencode，缺失回退 claude CLI。
     """
-    try:
-        binary = collect_opencode.opencode_bin()
-        command = [binary, "run", "--pure"]
-        if MODEL:
-            command += ["-m", MODEL]
-        return command
-    except RuntimeError:
-        pass
-    claude = os.environ.get("WORKLOG_CLAUDE") or shutil.which("claude")
-    if claude:
-        command = [claude, "-p"]
-        if MODEL:
-            command += ["--model", MODEL]
-        return command
+    builders = {"opencode": _opencode_command, "claude": _claude_command}
+    forced = os.environ.get("WORKLOG_RUNNER")
+    if forced in builders:
+        command = builders[forced]()
+        if command:
+            return command
+    for name in ("opencode", "claude"):
+        if name == forced:
+            continue
+        command = builders[name]()
+        if command:
+            return command
     return None
 
 

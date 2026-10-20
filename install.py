@@ -73,9 +73,10 @@ def materialize(runtime_dir: Path, out=print) -> None:
 
 class Config:
     def __init__(self, data_dir, model, daily_time, weekly_time, weekly_day, tools,
-                 claude_level="detailed", tapd_enabled=True, hourly_intraday=True):
+                 claude_level="detailed", tapd_enabled=True, hourly_intraday=True,
+                 runner=""):
         self.data_dir = data_dir          # Path，已展开 ~
-        self.model = model                # str，可为空（用 opencode 默认模型）
+        self.model = model                # str，可为空（用后端当前模型）
         self.daily_time = daily_time      # (hour, minute)
         self.weekly_time = weekly_time    # (hour, minute)
         self.weekly_day = weekly_day      # int，launchd Weekday（0/7=周日，5=周五）
@@ -83,6 +84,7 @@ class Config:
         self.claude_level = claude_level  # detailed / balanced / minimal
         self.tapd_enabled = tapd_enabled  # 关闭时往 plist 写 WORKLOG_TAPD=off
         self.hourly_intraday = hourly_intraday  # 白天每小时出毛坯版日报
+        self.runner = runner              # 模型后端：opencode / claude / ""（自动）
 
 
 # ---------- hooks 合并 ----------
@@ -158,6 +160,8 @@ def render_plist(label, summarize_args, interval, config, script_dir, home) -> d
     }
     if config.model:
         env["WORKLOG_MODEL"] = config.model
+    if config.runner:
+        env["WORKLOG_RUNNER"] = config.runner
     if not config.tapd_enabled:
         env["WORKLOG_TAPD"] = "off"
     name = label.rsplit(".", 1)[-1]
@@ -440,6 +444,7 @@ def collect_config(args, input_fn=input) -> Config:
     if args.yes:
         data_dir = Path((args.data_dir or "~/daily-report")).expanduser()
         model = args.model or ""
+        runner = args.runner or ""
         daily_time = _parse_time(args.daily_time or "21:07")
         weekly_time = _parse_time(args.weekly_time or "21:20")
         weekly_day = int(args.weekly_day or "5")
@@ -450,30 +455,33 @@ def collect_config(args, input_fn=input) -> Config:
             input_fn, "数据目录（流水/日报/周报）：",
             [("~/daily-report（推荐）", "~/daily-report")],
             "输入数据目录路径", "~/daily-report")).expanduser()
-        runner_name = None
-        if shutil.which("opencode"):
-            runner_name = "opencode"
-        elif shutil.which("claude"):
-            runner_name = "claude"
-        if runner_name is None:
-            # 没有任何模型执行后端：日报只能走纯脚本渲染，模型选择无意义
+        # 扫描本机可用的模型后端；两个都有时让用户选，选择写入定时任务环境
+        runners = [name for name in ("opencode", "claude") if shutil.which(name)]
+        if not runners:
             print("提示：未检测到 opencode 或 claude CLI，日报/周报将使用纯脚本分组渲染；"
                   "以后安装任一 CLI 并重跑安装即可启用模型精整。")
+            runner = ""
             model = ""
         else:
-            available = detect_models()
-            current = detect_current_model()
-            follow_label = "留空，用 {} 当前模型（以后换模型自动跟随）".format(runner_name)
+            if len(runners) > 1:
+                runner = _choose(input_fn, "模型后端（日报/周报整合用哪个 CLI）：",
+                                 [("opencode（推荐）", "opencode"), ("claude", "claude")])
+            else:
+                runner = runners[0]
+            follow_label = "留空，用 {} 当前模型（以后换模型自动跟随）".format(runner)
             model_options = [(follow_label, "")]
             default_index = 0
-            if current:
-                model_options.append(("{}（当前使用）".format(current), current))
-                default_index = 1
-            for available_model in available:
-                if available_model != current:
-                    model_options.append((available_model, available_model))
+            if runner == "opencode":
+                available = detect_models()
+                current = detect_current_model()
+                if current:
+                    model_options.append(("{}（当前使用）".format(current), current))
+                    default_index = 1
+                for available_model in available:
+                    if available_model != current:
+                        model_options.append((available_model, available_model))
             model = _choose_or_custom(
-                input_fn, "整合模型（列表来自本机 {}，已定位到当前使用项）：".format(runner_name),
+                input_fn, "整合模型（已定位到当前使用项）：",
                 model_options, "输入模型名", "", default=default_index)
         daily_time = _parse_time(_choose_or_custom(
             input_fn, "日报生成时间：",
@@ -497,7 +505,7 @@ def collect_config(args, input_fn=input) -> Config:
     if not 0 <= weekly_day <= 7:
         raise ValueError("weekly_day 必须在 0-7 之间")
     return Config(data_dir, model, daily_time, weekly_time, weekly_day, tools,
-                  claude_level, tapd_enabled, hourly_intraday)
+                  claude_level, tapd_enabled, hourly_intraday, runner)
 
 
 # ---------- 安装 / 卸载 ----------
@@ -540,7 +548,9 @@ def main(argv=None, home: Path = None, input_fn=input) -> int:
     parser = argparse.ArgumentParser(description="ai-worklog 安装/更新/卸载")
     parser.add_argument("--yes", action="store_true", help="全部接受默认值，不交互")
     parser.add_argument("--data-dir", help="数据目录，默认 ~/daily-report")
-    parser.add_argument("--model", help="整合模型，默认空=用 opencode 默认模型")
+    parser.add_argument("--model", help="整合模型，默认空=用后端当前模型")
+    parser.add_argument("--runner", choices=["opencode", "claude"],
+                        help="模型后端，默认自动（opencode 优先，缺失回退 claude）")
     parser.add_argument("--daily-time", help="日报时间 HH:MM，默认 21:07")
     parser.add_argument("--weekly-time", help="周报时间 HH:MM，默认 21:20")
     parser.add_argument("--weekly-day", help="周报在周几生成，0=周日…5=周五，默认 5")

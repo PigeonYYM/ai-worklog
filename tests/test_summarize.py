@@ -168,10 +168,23 @@ class TestModelRunnerFallback(SummarizeTestCase):
         self.original_bin = None
 
     def tearDown(self):
-        for var in ("WORKLOG_OPENCODE", "WORKLOG_CLAUDE"):
+        for var in ("WORKLOG_OPENCODE", "WORKLOG_CLAUDE", "WORKLOG_RUNNER"):
             os.environ.pop(var, None)
         self.stub_dir.cleanup()
         super().tearDown()
+
+    def test_forced_runner_via_env(self):
+        # WORKLOG_RUNNER=claude：即使 opencode 可用也必须用 claude
+        import summarize
+        oc_stub = Path(self.stub_dir.name) / "fake-opencode"
+        claude_stub = Path(self.stub_dir.name) / "fake-claude"
+        write_stub(oc_stub, "#!/usr/bin/env python3\nprint('来自 opencode')\n")
+        write_stub(claude_stub, "#!/usr/bin/env python3\nprint('来自 claude')\n")
+        os.environ["WORKLOG_OPENCODE"] = str(oc_stub)
+        os.environ["WORKLOG_CLAUDE"] = str(claude_stub)
+        os.environ["WORKLOG_RUNNER"] = "claude"
+        body = summarize.run_model("prompt")
+        self.assertIn("claude", body)
 
     def _no_opencode(self):
         import summarize

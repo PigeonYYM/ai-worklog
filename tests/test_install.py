@@ -186,7 +186,7 @@ class TestCollectConfig(InstallTestCase):
         import argparse
         base = dict(yes=True, data_dir=None, model=None, daily_time=None,
                     weekly_time=None, weekly_day=None, claude_level=None,
-                    no_tapd=False, no_hourly=False, tools=None, uninstall=False,
+                    no_tapd=False, no_hourly=False, tools=None, runner=None, uninstall=False,
                     action=None)
         base.update(overrides)
         return argparse.Namespace(**base)
@@ -199,7 +199,7 @@ class TestCollectConfig(InstallTestCase):
         self.assertTrue(config.tapd_enabled)
 
     def test_interactive_answers(self):
-        answers = iter(["1", "2", "2", "/tmp/data", "2", "my-model",
+        answers = iter(["1", "2", "2", "/tmp/data", "1", "2", "my-model",
                         "4", "22:00", "4", "20:30", "4", "1", "2", "2"])
         args = self.make_args(yes=False)
         original_models, original_current = install.detect_models, install.detect_current_model
@@ -221,7 +221,7 @@ class TestCollectConfig(InstallTestCase):
 
     def test_interactive_can_pick_detected_model(self):
         # 模型选项来自本机 opencode 已配置模型：第 2 项即探测到的第一个模型
-        answers = iter(["1", "1", "1", "2", "1", "1", "1", "1", "1"])
+        answers = iter(["1", "1", "1", "1", "2", "1", "1", "1", "1", "1"])
         args = self.make_args(yes=False)
         original_models, original_current = install.detect_models, install.detect_current_model
         install.detect_models = lambda: ["kimi-code-plan-cn/k3"]
@@ -235,7 +235,7 @@ class TestCollectConfig(InstallTestCase):
 
     def test_current_model_is_default_choice(self):
         # 模型步骤直接回车（取默认）应选中 opencode 当前正在使用的模型
-        answers = iter(["1", "1", "1", "", "1", "1", "1", "1", "1"])
+        answers = iter(["1", "1", "1", "1", "", "1", "1", "1", "1", "1"])
         args = self.make_args(yes=False)
         original_models, original_current = install.detect_models, install.detect_current_model
         install.detect_models = lambda: ["other-provider/m1"]
@@ -297,6 +297,30 @@ class TestCollectConfig(InstallTestCase):
             install.shutil.which = original
         self.assertEqual(config.tools, [])
         self.assertEqual(config.model, "")
+
+    def test_runner_choice_claude_skips_opencode_model_list(self):
+        # 用户选 claude 作后端：不该再去读 opencode 的模型列表
+        answers = iter(["1", "1", "1", "2", "1", "1", "1", "1", "1", "1"])
+        args = self.make_args(yes=False)
+
+        def forbid_detect():
+            raise AssertionError("选了 claude 后端不该读取 opencode 模型列表")
+
+        original = install.detect_models
+        install.detect_models = forbid_detect
+        try:
+            config = install.collect_config(args, input_fn=lambda p: next(answers))
+        finally:
+            install.detect_models = original
+        self.assertEqual(config.runner, "claude")
+        self.assertEqual(config.model, "")
+
+    def test_runner_written_to_plist_env(self):
+        plist = install.render_plist("com.worklog.daily", ["--daily"],
+                                     {"Hour": 21, "Minute": 7},
+                                     self.make_config(runner="claude"),
+                                     self.script_dir, self.home)
+        self.assertEqual(plist["EnvironmentVariables"]["WORKLOG_RUNNER"], "claude")
 
     def test_bad_time_rejected(self):
         args = self.make_args(daily_time="25:00")
