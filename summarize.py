@@ -9,6 +9,7 @@ import argparse
 import fcntl
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -323,13 +324,37 @@ def rebuild_scope(scope: str) -> None:
         print("无法识别的 scope：{}，跳过重建".format(scope), file=sys.stderr)
 
 
-def run_model(prompt: str) -> Optional[str]:
-    workdir = worklog.report_dir()
-    workdir.mkdir(parents=True, exist_ok=True)
+def model_runner():
+    """选一个可用的模型执行后端，返回不含 prompt 的 argv 前缀；都不可用返回 None。
+
+    优先 opencode（既有行为）；用户没装 opencode 时回退 claude CLI——
+    没有后端的用户不该永远只能拿到退化渲染。WORKLOG_CLAUDE 可覆盖 claude
+    路径（测试用）。
+    """
     try:
         binary = collect_opencode.opencode_bin()
+        command = [binary, "run", "--pure"]
+        if MODEL:
+            command += ["-m", MODEL]
+        return command
     except RuntimeError:
+        pass
+    claude = os.environ.get("WORKLOG_CLAUDE") or shutil.which("claude")
+    if claude:
+        command = [claude, "-p"]
+        if MODEL:
+            command += ["--model", MODEL]
+        return command
+    return None
+
+
+def run_model(prompt: str) -> Optional[str]:
+    command = model_runner()
+    if command is None:
         return None
+    command = command + [prompt]
+    workdir = worklog.report_dir()
+    workdir.mkdir(parents=True, exist_ok=True)
     # 用临时文件接收 stdout，而不是 capture_output 的管道：
     # 实测同一条 opencode 查询，capture_output=True 管道捕获得到 63352 字节，
     # 重定向到普通文件得到 79642 字节，两次 returncode 都是 0——
@@ -340,10 +365,6 @@ def run_model(prompt: str) -> Optional[str]:
     tmp_path = Path(tmp_name)
     try:
         with tmp_path.open("wb") as out_handle:
-            command = [binary, "run", "--pure"]
-            if MODEL:
-                command += ["-m", MODEL]
-            command.append(prompt)
             try:
                 result = subprocess.run(
                     command,

@@ -40,7 +40,7 @@ cd ai-worklog
 
 原地注册，改代码即时生效。
 
-要求：macOS（定时任务用 launchd；Linux 会打印等效 crontab 示例自行安装）、`opencode` CLI（整合与采集都依赖它）、Python 3.9+（系统自带即可）。
+要求：macOS（定时任务用 launchd；Linux 会打印等效 crontab 示例自行安装）、Python 3.9+（系统自带即可）。模型后端二选一即可：**opencode 或 claude CLI**（日报/周报的模型精整需要其一，都没有则永远走纯脚本分组渲染；opencode 同时用于采集 opencode 会话，没装则该工具的采集自然空缺）。
 
 ## 更新
 

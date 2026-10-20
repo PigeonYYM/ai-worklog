@@ -40,7 +40,7 @@ cd ai-worklog
 
 Registers in place — code edits take effect immediately.
 
-Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines), the `opencode` CLI (used for summarization and collection), Python 3.9+ (system Python is fine).
+Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines), Python 3.9+ (system Python is fine). Model backend — **either opencode or the claude CLI** (model-rendered reports need one of them; with neither, reports always use the plain grouped render; opencode is additionally used to collect opencode sessions, which is naturally absent when it's not installed).
 
 ## Updating
 

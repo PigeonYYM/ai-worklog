@@ -285,6 +285,19 @@ class TestCollectConfig(InstallTestCase):
         finally:
             install.shutil.which = original_which
 
+    def test_no_model_runner_skips_model_question(self):
+        # opencode/claude 都没装：模型选择无意义，应跳过该问题并提示
+        answers = iter(["1", "1", "1", "1", "1", "1"])  # 数据目录/日报/周报时间/周几/TAPD/hourly
+        args = self.make_args(yes=False)
+        original = install.shutil.which
+        install.shutil.which = lambda name: None
+        try:
+            config = install.collect_config(args, input_fn=lambda p: next(answers))
+        finally:
+            install.shutil.which = original
+        self.assertEqual(config.tools, [])
+        self.assertEqual(config.model, "")
+
     def test_bad_time_rejected(self):
         args = self.make_args(daily_time="25:00")
         with self.assertRaises(ValueError):

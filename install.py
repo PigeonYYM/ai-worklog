@@ -450,20 +450,31 @@ def collect_config(args, input_fn=input) -> Config:
             input_fn, "数据目录（流水/日报/周报）：",
             [("~/daily-report（推荐）", "~/daily-report")],
             "输入数据目录路径", "~/daily-report")).expanduser()
-        available = detect_models()
-        current = detect_current_model()
-        model_options = [("留空，跟随 opencode 当前模型（以后换模型自动跟随）", "")]
-        default_index = 0
-        if current:
-            label = "{}（当前使用）".format(current)
-            model_options.append((label, current))
-            default_index = 1
-        for model in available:
-            if model != current:
-                model_options.append((model, model))
-        model = _choose_or_custom(
-            input_fn, "整合模型（列表来自本机 opencode，已定位到当前使用项）：",
-            model_options, "输入模型名", "", default=default_index)
+        runner_name = None
+        if shutil.which("opencode"):
+            runner_name = "opencode"
+        elif shutil.which("claude"):
+            runner_name = "claude"
+        if runner_name is None:
+            # 没有任何模型执行后端：日报只能走纯脚本渲染，模型选择无意义
+            print("提示：未检测到 opencode 或 claude CLI，日报/周报将使用纯脚本分组渲染；"
+                  "以后安装任一 CLI 并重跑安装即可启用模型精整。")
+            model = ""
+        else:
+            available = detect_models()
+            current = detect_current_model()
+            follow_label = "留空，用 {} 当前模型（以后换模型自动跟随）".format(runner_name)
+            model_options = [(follow_label, "")]
+            default_index = 0
+            if current:
+                model_options.append(("{}（当前使用）".format(current), current))
+                default_index = 1
+            for available_model in available:
+                if available_model != current:
+                    model_options.append((available_model, available_model))
+            model = _choose_or_custom(
+                input_fn, "整合模型（列表来自本机 {}，已定位到当前使用项）：".format(runner_name),
+                model_options, "输入模型名", "", default=default_index)
         daily_time = _parse_time(_choose_or_custom(
             input_fn, "日报生成时间：",
             [("21:07（推荐）", "21:07"), ("20:00", "20:00"), ("22:00", "22:00")],

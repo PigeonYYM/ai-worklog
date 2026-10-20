@@ -157,6 +157,68 @@ def write_stub(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
+class TestModelRunnerFallback(SummarizeTestCase):
+    """没有 opencode 的用户：run_model 应回退到 claude CLI 而不是直接退化。"""
+
+    def setUp(self):
+        super().setUp()
+        self.stub_dir = tempfile.TemporaryDirectory()
+        # 本机真装着 opencode，用 monkeypatch 模拟「没有 opencode」，
+        # 防止测试误触发真实模型调用
+        self.original_bin = None
+
+    def tearDown(self):
+        for var in ("WORKLOG_OPENCODE", "WORKLOG_CLAUDE"):
+            os.environ.pop(var, None)
+        self.stub_dir.cleanup()
+        super().tearDown()
+
+    def _no_opencode(self):
+        import summarize
+        original = summarize.collect_opencode.opencode_bin
+
+        def raise_missing():
+            raise RuntimeError("找不到 opencode 可执行文件")
+
+        summarize.collect_opencode.opencode_bin = raise_missing
+        return original
+
+    def test_falls_back_to_claude_when_opencode_missing(self):
+        import summarize
+        original = self._no_opencode()
+        stub = Path(self.stub_dir.name) / "fake-claude"
+        write_stub(stub, "#!/usr/bin/env python3\nprint('## repo\\n- 做了某事')\n")
+        os.environ["WORKLOG_CLAUDE"] = str(stub)
+        try:
+            body = summarize.run_model("prompt")
+        finally:
+            summarize.collect_opencode.opencode_bin = original
+        self.assertIsNotNone(body)
+        self.assertIn("做了某事", body)
+
+    def test_prefers_opencode_when_both_available(self):
+        import summarize
+        oc_stub = Path(self.stub_dir.name) / "fake-opencode"
+        claude_stub = Path(self.stub_dir.name) / "fake-claude"
+        write_stub(oc_stub, "#!/usr/bin/env python3\nprint('来自 opencode')\n")
+        write_stub(claude_stub, "#!/usr/bin/env python3\nprint('来自 claude')\n")
+        os.environ["WORKLOG_OPENCODE"] = str(oc_stub)
+        os.environ["WORKLOG_CLAUDE"] = str(claude_stub)
+        body = summarize.run_model("prompt")
+        self.assertIn("opencode", body)
+
+    def test_no_runner_returns_none(self):
+        import summarize
+        original = self._no_opencode()
+        original_which = summarize.shutil.which
+        summarize.shutil.which = lambda name: None
+        try:
+            self.assertIsNone(summarize.run_model("prompt"))
+        finally:
+            summarize.collect_opencode.opencode_bin = original
+            summarize.shutil.which = original_which
+
+
 class TestRunModelStub(SummarizeTestCase):
     """用真实子进程（可执行的 stub 脚本）驱动 run_model 的临时文件机制，
     而不是让它在 opencode_bin() 处提前短路返回 None。这条路径此前完全没有
