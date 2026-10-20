@@ -168,7 +168,7 @@ class TestModelRunnerFallback(SummarizeTestCase):
         self.original_bin = None
 
     def tearDown(self):
-        for var in ("WORKLOG_OPENCODE", "WORKLOG_CLAUDE", "WORKLOG_RUNNER"):
+        for var in ("WORKLOG_OPENCODE", "WORKLOG_CLAUDE", "WORKLOG_RUNNER", "WORKLOG_CODEX"):
             os.environ.pop(var, None)
         self.stub_dir.cleanup()
         super().tearDown()
@@ -185,6 +185,20 @@ class TestModelRunnerFallback(SummarizeTestCase):
         os.environ["WORKLOG_RUNNER"] = "claude"
         body = summarize.run_model("prompt")
         self.assertIn("claude", body)
+
+    def test_forced_runner_codex(self):
+        # 后端注册表覆盖 codex：WORKLOG_RUNNER=codex 时走 codex exec
+        import summarize
+        codex_stub = Path(self.stub_dir.name) / "fake-codex"
+        write_stub(codex_stub, "#!/usr/bin/env python3\nprint('来自 codex')\n")
+        os.environ["WORKLOG_CODEX"] = str(codex_stub)
+        os.environ["WORKLOG_RUNNER"] = "codex"
+        original_bin = self._no_opencode()
+        try:
+            body = summarize.run_model("prompt")
+        finally:
+            summarize.collect_opencode.opencode_bin = original_bin
+        self.assertIn("codex", body)
 
     def _no_opencode(self):
         import summarize

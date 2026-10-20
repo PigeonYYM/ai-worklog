@@ -51,6 +51,10 @@ PLIST_PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
+# 可选的模型后端（日报/周报整合用的模型 CLI）。扫描本机后过滤出已安装的供用户选择；
+# 与 summarize.RUNNER_SPECS 保持同一集合（两边独立是刻意的：install 不依赖 summarize）。
+RUNNER_NAMES = ("opencode", "claude", "codex", "pi", "gemini")
+
 # 命中这些目录说明 install.py 运行在按版本地址化的临时缓存里（npx、插件市场），
 # hooks 和 launchd 指向它会随更新失效——需要先把运行脚本物化到稳定目录。
 EPHEMERAL_MARKERS = ("/.npm/_npx/", "/.claude/plugins/", "/.codex/plugins/", "/.agents/plugins/")
@@ -445,7 +449,7 @@ def collect_config(args, input_fn=input) -> Config:
         data_dir = Path((args.data_dir or "~/daily-report")).expanduser()
         model = args.model or ""
         runner = args.runner or ""
-        daily_time = _parse_time(args.daily_time or "21:07")
+        daily_time = _parse_time(args.daily_time or "21:00")
         weekly_time = _parse_time(args.weekly_time or "21:20")
         weekly_day = int(args.weekly_day or "5")
         tapd_enabled = not args.no_tapd
@@ -455,17 +459,19 @@ def collect_config(args, input_fn=input) -> Config:
             input_fn, "数据目录（流水/日报/周报）：",
             [("~/daily-report（推荐）", "~/daily-report")],
             "输入数据目录路径", "~/daily-report")).expanduser()
-        # 扫描本机可用的模型后端；两个都有时让用户选，选择写入定时任务环境
-        runners = [name for name in ("opencode", "claude") if shutil.which(name)]
+        # 扫描本机可用的模型后端；多于一个时让用户选，选择写入定时任务环境
+        runners = [name for name in RUNNER_NAMES if shutil.which(name)]
         if not runners:
-            print("提示：未检测到 opencode 或 claude CLI，日报/周报将使用纯脚本分组渲染；"
-                  "以后安装任一 CLI 并重跑安装即可启用模型精整。")
+            print("提示：未检测到任何模型 CLI（{}），日报/周报将使用纯脚本分组渲染；"
+                  "以后安装任一 CLI 并重跑安装即可启用模型精整。".format(" / ".join(RUNNER_NAMES)))
             runner = ""
             model = ""
         else:
             if len(runners) > 1:
-                runner = _choose(input_fn, "模型后端（日报/周报整合用哪个 CLI）：",
-                                 [("opencode（推荐）", "opencode"), ("claude", "claude")])
+                runner = _choose(
+                    input_fn, "模型后端（日报/周报整合用哪个 CLI）：",
+                    [(name + ("（推荐）" if index == 0 else ""), name)
+                     for index, name in enumerate(runners)])
             else:
                 runner = runners[0]
             follow_label = "留空，用 {} 当前模型（以后换模型自动跟随）".format(runner)
@@ -485,8 +491,8 @@ def collect_config(args, input_fn=input) -> Config:
                 model_options, "输入模型名", "", default=default_index)
         daily_time = _parse_time(_choose_or_custom(
             input_fn, "日报生成时间：",
-            [("21:07（推荐）", "21:07"), ("20:00", "20:00"), ("22:00", "22:00")],
-            "输入时间 HH:MM", "21:07"))
+            [("21:00（推荐）", "21:00"), ("20:00", "20:00"), ("22:00", "22:00")],
+            "输入时间 HH:MM", "21:00"))
         weekly_time = _parse_time(_choose_or_custom(
             input_fn, "周报生成时间：",
             [("21:20（推荐）", "21:20"), ("20:00", "20:00"), ("22:00", "22:00")],
@@ -549,8 +555,8 @@ def main(argv=None, home: Path = None, input_fn=input) -> int:
     parser.add_argument("--yes", action="store_true", help="全部接受默认值，不交互")
     parser.add_argument("--data-dir", help="数据目录，默认 ~/daily-report")
     parser.add_argument("--model", help="整合模型，默认空=用后端当前模型")
-    parser.add_argument("--runner", choices=["opencode", "claude"],
-                        help="模型后端，默认自动（opencode 优先，缺失回退 claude）")
+    parser.add_argument("--runner", choices=list(RUNNER_NAMES),
+                        help="模型后端，默认自动（按优先级取本机第一个可用的）")
     parser.add_argument("--daily-time", help="日报时间 HH:MM，默认 21:07")
     parser.add_argument("--weekly-time", help="周报时间 HH:MM，默认 21:20")
     parser.add_argument("--weekly-day", help="周报在周几生成，0=周日…5=周五，默认 5")

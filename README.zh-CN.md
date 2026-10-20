@@ -6,7 +6,7 @@
 
 ## 安装
 
-三种方式任选，安装过程的配置全部**选项化**：方向键 ↑/↓ 移动、空格多选、Enter 确认（回车取默认值）。安装时会**扫描本机环境**让你选择：工具（claude/codex/opencode 多选）、**模型后端**（检测到 opencode 和 claude 两个 CLI 时任选，选择写入定时任务的 `WORKLOG_RUNNER`）、整合模型（列表读自所选后端，opencode 后端下自动定位到你当前使用的模型）。其余配置：Claude 记录粒度、数据目录、日报/周报时间、TAPD 开关、白天毛坯版开关。
+三种方式任选，安装过程的配置全部**选项化**：方向键 ↑/↓ 移动、空格多选、Enter 确认（回车取默认值）。安装时会**扫描本机环境**让你选择：工具（claude/codex/opencode 多选）、**模型后端**（扫描本机已安装的模型 CLI——opencode / claude / codex / pi / gemini，任选其一，选择写入定时任务的 `WORKLOG_RUNNER`）、整合模型（列表读自所选后端，opencode 后端下自动定位到你当前使用的模型）。其余配置：Claude 记录粒度、数据目录、日报/周报时间、TAPD 开关、白天毛坯版开关。
 
 > ⚠️ **三种方式互斥，不要混装**（比如同时用插件市场和 clone 安装）——Claude hooks 会被注册两次，同一事件记录两条流水。切换方式前先用旧方式的 uninstall 清理。
 
@@ -40,7 +40,7 @@ cd ai-worklog
 
 原地注册，改代码即时生效。
 
-要求：macOS（定时任务用 launchd；Linux 会打印等效 crontab 示例自行安装）、Python 3.9+（系统自带即可）。模型后端二选一即可：**opencode 或 claude CLI**（日报/周报的模型精整需要其一，都没有则永远走纯脚本分组渲染；opencode 同时用于采集 opencode 会话，没装则该工具的采集自然空缺）。
+要求：macOS（定时任务用 launchd；Linux 会打印等效 crontab 示例自行安装）、Python 3.9+（系统自带即可）。模型后端五选一即可：**opencode / claude / codex / pi / gemini**（日报/周报的模型精整需要其一，都没有则永远走纯脚本分组渲染；opencode 同时用于采集 opencode 会话，没装则该工具的采集自然空缺）。
 
 ## 更新
 
@@ -62,7 +62,7 @@ cd ai-worklog
 ## 数据
 
 - `<数据目录>/.raw/YYYY-MM-DD.tsv` — 流水，append-only，**唯一真相源**。五列：时间、项目、标题、来源工具、时长秒（tab 分隔）
-- `<数据目录>/YYYY-MM-DD.md` — 日报，派生产物：白天每小时第 53 分出**毛坯版**（纯脚本渲染，零模型成本），每晚 21:07 出**模型精整版**（均全量重建；小时任务可用 `--no-hourly` 关闭）
+- `<数据目录>/YYYY-MM-DD.md` — 日报，派生产物：白天每小时第 53 分出**毛坯版**（纯脚本渲染，零模型成本），每晚 21:00 出**模型精整版**（均全量重建；小时任务可用 `--no-hourly` 关闭）
 - `<数据目录>/weekly/YYYY-Www.md` — 周报，派生产物，每周生成
 - `<数据目录>/.state/` — 水位线（`opencode.cursor`）、launchd 日志、TAPD 关联状态（`tapd_links.json` / `tapd_pending.json`）
 - `<数据目录>/.state/marks/` — 各工具会话的时长起点标记（`<工具>-<会话>.mark`）

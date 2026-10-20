@@ -6,7 +6,7 @@ Cross-tool worklog for AI coding assistants: Claude Code, Codex and OpenCode ses
 
 ## Installation
 
-Three options — all lead into the same **fully option-driven** setup: arrow keys to move, Space for multi-select, Enter to confirm (Enter alone takes the default). The installer **scans your machine and lets you choose**: tools (claude/codex/opencode multi-select), **model backend** (pick either CLI when both opencode and claude are present; persisted as `WORKLOG_RUNNER` in the scheduled jobs), and the summarization model (list read from the chosen backend; with the opencode backend it pre-selects the model you currently use). Remaining config: Claude granularity, data directory, report times, TAPD toggle, hourly draft toggle.
+Three options — all lead into the same **fully option-driven** setup: arrow keys to move, Space for multi-select, Enter to confirm (Enter alone takes the default). The installer **scans your machine and lets you choose**: tools (claude/codex/opencode multi-select), **model backend** (scans installed model CLIs — opencode / claude / codex / pi / gemini — and lets you pick; persisted as `WORKLOG_RUNNER` in the scheduled jobs), and the summarization model (list read from the chosen backend; with the opencode backend it pre-selects the model you currently use). Remaining config: Claude granularity, data directory, report times, TAPD toggle, hourly draft toggle.
 
 > ⚠️ **Pick exactly one — do not mix them** (e.g. plugin marketplace *and* clone install). Claude hooks would be registered twice and every event recorded twice. Uninstall via the old method before switching.
 
@@ -40,7 +40,7 @@ cd ai-worklog
 
 Registers in place — code edits take effect immediately.
 
-Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines), Python 3.9+ (system Python is fine). Model backend — **either opencode or the claude CLI** (model-rendered reports need one of them; with neither, reports always use the plain grouped render; opencode is additionally used to collect opencode sessions, which is naturally absent when it's not installed).
+Requirements: macOS (scheduled jobs use launchd; on Linux the installer prints equivalent crontab lines), Python 3.9+ (system Python is fine). Model backend — **any one of opencode / claude / codex / pi / gemini** (model-rendered reports need one of them; with neither, reports always use the plain grouped render; opencode is additionally used to collect opencode sessions, which is naturally absent when it's not installed).
 
 ## Updating
 
@@ -62,7 +62,7 @@ Removes hook registrations and scheduled jobs. **Your data directory is left unt
 ## Data
 
 - `<data-dir>/.raw/YYYY-MM-DD.tsv` — the stream, append-only, **the single source of truth**. Five tab-separated columns: time, project, title, source tool, duration in seconds
-- `<data-dir>/YYYY-MM-DD.md` — daily report, a derived artifact: a **draft render** every hour at :53 during the day (plain script, zero model cost) and the **model render** nightly at 21:07 (both full rebuilds; the hourly job can be disabled with `--no-hourly`)
+- `<data-dir>/YYYY-MM-DD.md` — daily report, a derived artifact: a **draft render** every hour at :53 during the day (plain script, zero model cost) and the **model render** nightly at 21:00 (both full rebuilds; the hourly job can be disabled with `--no-hourly`)
 - `<data-dir>/weekly/YYYY-Www.md` — weekly report, a derived artifact, built weekly
 - `<data-dir>/.state/` — watermarks (`opencode.cursor`), launchd logs, TAPD linking state (`tapd_links.json` / `tapd_pending.json`)
 - `<data-dir>/.state/marks/` — per-session duration start marks (`<tool>-<session>.mark`)

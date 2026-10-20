@@ -324,43 +324,51 @@ def rebuild_scope(scope: str) -> None:
         print("无法识别的 scope：{}，跳过重建".format(scope), file=sys.stderr)
 
 
-def _opencode_command():
-    try:
-        binary = collect_opencode.opencode_bin()
-    except RuntimeError:
-        return None
-    command = [binary, "run", "--pure"]
-    if MODEL:
-        command += ["-m", MODEL]
-    return command
+# 各模型 CLI 的无头调用方式（prompt 一律作为最后一个参数追加）。
+# 新增后端只需在这里加一行并在 install.py 的 RUNNER_NAMES 里登记。
+RUNNER_SPECS = {
+    "opencode": lambda b, m: [b, "run", "--pure"] + (["-m", m] if m else []),
+    "claude": lambda b, m: [b, "-p"] + (["--model", m] if m else []),
+    "codex": lambda b, m: [b, "exec", "-s", "read-only"] + (["-m", m] if m else []),
+    "pi": lambda b, m: [b, "-p"] + (["--model", m] if m else []),
+    "gemini": lambda b, m: [b, "-p"] + (["-m", m] if m else []),
+}
+# 自动模式下的优先顺序
+RUNNER_PRIORITY = ("opencode", "claude", "codex", "pi", "gemini")
 
 
-def _claude_command():
-    claude = os.environ.get("WORKLOG_CLAUDE") or shutil.which("claude")
-    if not claude:
+def _runner_binary(name: str):
+    """各后端的可执行文件；WORKLOG_<NAME> 环境变量可覆盖（测试与特殊安装用）。"""
+    if name == "opencode":
+        try:
+            return collect_opencode.opencode_bin()
+        except RuntimeError:
+            return None
+    return os.environ.get("WORKLOG_" + name.upper()) or shutil.which(name)
+
+
+def _backend_command(name: str):
+    binary = _runner_binary(name)
+    if not binary:
         return None
-    command = [claude, "-p"]
-    if MODEL:
-        command += ["--model", MODEL]
-    return command
+    return RUNNER_SPECS[name](binary, MODEL)
 
 
 def model_runner():
     """选一个可用的模型执行后端，返回不含 prompt 的 argv 前缀；都不可用返回 None。
 
-    WORKLOG_RUNNER=opencode|claude 可强制指定后端（安装时用户的选择会
-    写入定时任务环境）；未指定时优先 opencode，缺失回退 claude CLI。
+    WORKLOG_RUNNER 可强制指定后端（安装时用户的选择会写入定时任务环境）；
+    未指定时按 RUNNER_PRIORITY 顺序取第一个本机可用的。
     """
-    builders = {"opencode": _opencode_command, "claude": _claude_command}
     forced = os.environ.get("WORKLOG_RUNNER")
-    if forced in builders:
-        command = builders[forced]()
+    if forced in RUNNER_SPECS:
+        command = _backend_command(forced)
         if command:
             return command
-    for name in ("opencode", "claude"):
+    for name in RUNNER_PRIORITY:
         if name == forced:
             continue
-        command = builders[name]()
+        command = _backend_command(name)
         if command:
             return command
     return None

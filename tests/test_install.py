@@ -193,7 +193,7 @@ class TestCollectConfig(InstallTestCase):
 
     def test_yes_mode_uses_defaults(self):
         config = install.collect_config(self.make_args(), input_fn=lambda p: "")
-        self.assertEqual(config.daily_time, (21, 7))
+        self.assertEqual(config.daily_time, (21, 0))
         self.assertEqual(config.weekly_day, 5)
         self.assertEqual(config.claude_level, "detailed")
         self.assertTrue(config.tapd_enabled)
