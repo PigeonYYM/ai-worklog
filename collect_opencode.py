@@ -5,12 +5,10 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import shutil
-import subprocess
+import sqlite3
 import sys
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -57,42 +55,34 @@ def write_cursor(value: int) -> None:
     cursor_path().write_text(str(int(value)), encoding="utf-8")
 
 
+def database_path() -> Path:
+    override = os.environ.get("WORKLOG_OPENCODE_DB")
+    if override:
+        return Path(override)
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return data_home / "opencode" / "opencode.db"
+
+
 def fetch_sessions(since_ms: int) -> List[dict]:
-    query = (
-        "SELECT id, directory, title, time_created, time_updated FROM session "
-        "WHERE time_updated > {} ORDER BY time_updated".format(int(since_ms))
-    )
-    # 用临时文件接收 stdout，而不是 capture_output 的管道：
-    # 实测 opencode（Bun 打包的二进制）在写大量 JSON 到管道后立即退出，
-    # 会在管道缓冲区超过 64KB 时截断输出（真实数据库几百个会话时必现）。
-    # 重定向到文件规避了这个管道竞态。
-    with tempfile.NamedTemporaryFile(
-        mode="w+", suffix=".json", delete=False
-    ) as tmp:
-        tmp_path = Path(tmp.name)
+    path = database_path()
+    if not path.exists():
+        raise RuntimeError("找不到 OpenCode 数据库: {}".format(path))
     try:
-        with tmp_path.open("wb") as out_handle:
-            result = subprocess.run(
-                [opencode_bin(), "db", "--format", "json", query],
-                stdout=out_handle,
-                stderr=subprocess.PIPE,
-                timeout=QUERY_TIMEOUT,
-                stdin=subprocess.DEVNULL,
-            )
-        if result.returncode != 0:
-            return []
+        connection = sqlite3.connect(
+            path.as_uri() + "?mode=ro", uri=True, timeout=QUERY_TIMEOUT
+        )
+        connection.row_factory = sqlite3.Row
         try:
-            payload = json.loads(tmp_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, ValueError, OSError):
-            return []
-    finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-    if isinstance(payload, dict):
-        payload = payload.get("rows") or payload.get("data") or []
-    return payload if isinstance(payload, list) else []
+            rows = connection.execute(
+                "SELECT id, directory, title, time_created, time_updated FROM session "
+                "WHERE time_updated > ? ORDER BY time_updated",
+                (int(since_ms),),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise RuntimeError("OpenCode 数据库查询失败: {}".format(exc)) from exc
 
 
 def _as_int(value) -> int:
@@ -152,7 +142,7 @@ def main() -> int:
     since = read_cursor()
     try:
         rows = fetch_sessions(since)
-    except (subprocess.TimeoutExpired, OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError) as exc:
         print("opencode 查询失败: {}".format(exc), file=sys.stderr)
         return 1
     written = collect(rows, since)

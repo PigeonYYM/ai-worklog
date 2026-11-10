@@ -1,9 +1,12 @@
+import io
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -15,11 +18,60 @@ class CollectTestCase(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("WORKLOG_HOME", None)
+        os.environ.pop("WORKLOG_OPENCODE_DB", None)
         self.tmp.cleanup()
 
     def _row(self, title, directory, when):
         epoch_ms = int(when.timestamp() * 1000)
         return {"id": "s1", "directory": directory, "title": title, "time_updated": epoch_ms}
+
+
+class TestFetchSessions(CollectTestCase):
+    def test_reads_local_sqlite_when_legacy_db_command_is_unavailable(self):
+        # 新版 OpenCode 删除 db 子命令后，旧实现返回 []，这里必须仍能按水位线取到会话。
+        import collect_opencode
+
+        database = Path(self.tmp.name) / "opencode.db"
+        os.environ["WORKLOG_OPENCODE_DB"] = str(database)
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "CREATE TABLE session ("
+            "id TEXT, directory TEXT, title TEXT, "
+            "time_created INTEGER, time_updated INTEGER)"
+        )
+        connection.executemany(
+            "INSERT INTO session VALUES (?, ?, ?, ?, ?)",
+            [
+                ("old", "/a/old", "已采集", 100, 1000),
+                ("new", "/a/new", "新会话", 1500, 2000),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        with patch.object(collect_opencode, "opencode_bin", return_value="/usr/bin/false"):
+            rows = collect_opencode.fetch_sessions(1000)
+
+        self.assertEqual(rows, [{
+            "id": "new",
+            "directory": "/a/new",
+            "title": "新会话",
+            "time_created": 1500,
+            "time_updated": 2000,
+        }])
+
+    def test_missing_database_is_reported_as_failure(self):
+        # 查询失败必须让 main 返回非零并写 stderr，不能静默推进成一次成功的空采集。
+        import collect_opencode
+
+        os.environ["WORKLOG_OPENCODE_DB"] = str(Path(self.tmp.name) / "missing.db")
+        stderr = io.StringIO()
+        with patch.object(collect_opencode, "opencode_bin", return_value="/usr/bin/false"), \
+                patch("sys.stderr", stderr):
+            result = collect_opencode.main()
+
+        self.assertEqual(result, 1)
+        self.assertIn("opencode 查询失败", stderr.getvalue())
 
 
 class TestCollect(CollectTestCase):
